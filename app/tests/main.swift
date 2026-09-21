@@ -168,6 +168,81 @@ checkEqual(dateSnapshot?.session?.resetsAt?.timeIntervalSince1970, 1790015400.25
 checkEqual(dateSnapshot?.weekly?.resetsAt?.timeIntervalSince1970, 1790499600.0,
            "plain (non-fractional) timestamp parses to the exact expected instant")
 
+
+print("migrateAccounts")
+
+func freshDefaults(_ name: String) -> UserDefaults {
+    let defaults = UserDefaults(suiteName: name)!
+    defaults.removePersistentDomain(forName: name)
+    return defaults
+}
+
+// A 1.3.x user carries their cookie and threshold under the legacy keys.
+let upgrading = freshDefaults("cub.test.upgrading")
+upgrading.set("anthropic-device-id=abc; sessionKey=xyz", forKey: "claude_session_cookie")
+upgrading.set(75, forKey: "last_notified_threshold")
+migrateAccounts(upgrading)
+checkEqual(upgrading.string(forKey: "account_1_cookie"),
+           "anthropic-device-id=abc; sessionKey=xyz", "upgrade: cookie copied to slot 1")
+checkEqual(upgrading.integer(forKey: "account_1_threshold"), 75,
+           "upgrade: threshold copied to slot 1")
+checkEqual(upgrading.integer(forKey: "accounts_schema_version"), 2,
+           "upgrade: schema version stamped")
+// Copy, never delete: a rollback to 1.3.x must still find the cookie.
+checkEqual(upgrading.string(forKey: "claude_session_cookie"),
+           "anthropic-device-id=abc; sessionKey=xyz", "upgrade: legacy key survives")
+checkEqual(upgrading.integer(forKey: "last_notified_threshold"), 75,
+           "upgrade: legacy threshold survives")
+// An upgrade inherits one account, never two.
+checkEqual(upgrading.string(forKey: "account_2_cookie"), nil,
+           "upgrade: slot 2 is left empty")
+
+// A brand new install has nothing to carry over.
+let fresh = freshDefaults("cub.test.fresh")
+migrateAccounts(fresh)
+checkEqual(fresh.string(forKey: "account_1_cookie"), nil, "fresh install: no cookie invented")
+checkEqual(fresh.integer(forKey: "accounts_schema_version"), 2, "fresh install: schema stamped")
+
+// Running twice must not clobber a cookie the user changed after migrating.
+let rerun = freshDefaults("cub.test.rerun")
+rerun.set("old-cookie", forKey: "claude_session_cookie")
+migrateAccounts(rerun)
+rerun.set("new-cookie", forKey: "account_1_cookie")
+migrateAccounts(rerun)
+checkEqual(rerun.string(forKey: "account_1_cookie"), "new-cookie",
+           "idempotent: a post-migration cookie is not overwritten")
+
+// An empty legacy cookie is not a cookie.
+let empty = freshDefaults("cub.test.empty")
+empty.set("", forKey: "claude_session_cookie")
+migrateAccounts(empty)
+checkEqual(empty.string(forKey: "account_1_cookie"), nil, "empty legacy cookie is ignored")
+
+// A cookie with no notification history must land rearmed at 0, so the user
+// gets the alerts they never saw rather than none.
+let noThreshold = freshDefaults("cub.test.nothreshold")
+noThreshold.set("cookie-only", forKey: "claude_session_cookie")
+migrateAccounts(noThreshold)
+checkEqual(noThreshold.integer(forKey: "account_1_threshold"), 0,
+           "a legacy install with no threshold starts slot 1 rearmed")
+
+// The settings both accounts share stay global: moving them per-slot would
+// silently reset preferences the user already chose.
+let globals = freshDefaults("cub.test.globals")
+globals.set(false, forKey: "usage_notifications_enabled")
+globals.set("dark", forKey: "appearance_mode")
+migrateAccounts(globals)
+checkEqual(globals.object(forKey: "usage_notifications_enabled") as? Bool, false,
+           "migration leaves usage_notifications_enabled alone")
+checkEqual(globals.string(forKey: "appearance_mode"), "dark",
+           "migration leaves appearance_mode alone")
+
+// These suites are scratch space for the assertions above; drop them so a test
+// run leaves nothing behind in the real preferences directory.
+for name in ["cub.test.upgrading", "cub.test.fresh", "cub.test.rerun",
+             "cub.test.empty", "cub.test.nothreshold", "cub.test.globals"] {
+    UserDefaults(suiteName: name)?.removePersistentDomain(forName: name)
+}
 print("")
 print(failures == 0 ? "PASS" : "\(failures) FAILURE(S)")
 exit(failures == 0 ? 0 : 1)

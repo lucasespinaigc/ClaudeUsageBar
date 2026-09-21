@@ -99,3 +99,30 @@ private func isoDate(_ raw: String?) -> Date? {
     plain.formatOptions = [.withInternetDateTime]
     return plain.date(from: raw)
 }
+
+// MARK: - Account slots
+
+let accountsSchemaVersion = 2
+
+func accountKey(_ slot: Int, _ suffix: String) -> String { "account_\(slot)_\(suffix)" }
+
+/// Moves a 1.3.x single-account install onto the per-slot keys. Runs once,
+/// before any UsageManager reads its cookie.
+///
+/// Copies instead of moving: this runs exactly once on each user's machine and
+/// has no undo, so leaving the legacy keys in place is what makes a rollback to
+/// 1.3.x survivable. The cost is one orphan key.
+func migrateAccounts(_ defaults: UserDefaults) {
+    guard defaults.integer(forKey: "accounts_schema_version") < accountsSchemaVersion else {
+        return
+    }
+
+    let legacyCookie = defaults.string(forKey: "claude_session_cookie") ?? ""
+    if !legacyCookie.isEmpty, defaults.string(forKey: accountKey(1, "cookie")) == nil {
+        defaults.set(legacyCookie, forKey: accountKey(1, "cookie"))
+        defaults.set(defaults.integer(forKey: "last_notified_threshold"),
+                     forKey: accountKey(1, "threshold"))
+    }
+
+    defaults.set(accountsSchemaVersion, forKey: "accounts_schema_version")
+}

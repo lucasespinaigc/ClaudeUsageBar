@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import Carbon
+import Combine
 import ServiceManagement
 
 // Secondary text: system gray in dark; darker in light, where the vibrant
@@ -36,11 +37,12 @@ struct UsageBar: View {
 class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem!
     var popover: NSPopover!
-    var usageManager: UsageManager!
+    var store: AccountsStore!
     var statusManager: StatusManager!
     var updateManager: UpdateManager!
     var eventMonitor: Any?
     var hotKeyRef: EventHotKeyRef?
+    private var cancellables = Set<AnyCancellable>()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // NSUserNotification (deprecated but works without permissions for unsigned apps)
@@ -62,9 +64,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         // Initialize managers
-        usageManager = UsageManager(statusItem: statusItem, delegate: self)
+        store = AccountsStore()
         statusManager = StatusManager()
         updateManager = UpdateManager()
+
+        // The managers no longer push the icon through a delegate, so the
+        // status item follows slot 1's reading from here. A menu bar item per
+        // account arrives in a later task.
+        store.accounts[0].$sessionUsage
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] percentage in self?.updateStatusIcon(percentage: percentage) }
+            .store(in: &cancellables)
 
         // Create popover
         popover = NSPopover()
@@ -72,7 +82,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         popover.contentSize = NSSize(width: 360, height: 320)
         popover.behavior = .transient
         popover.contentViewController = NSHostingController(rootView: UsageView(
-            usageManager: usageManager,
+            store: store,
             statusManager: statusManager,
             updateManager: updateManager
         ))
@@ -96,13 +106,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         // Fetch initial data
-        usageManager.fetchUsage()
+        store.refreshAll()
         statusManager.fetch()
         updateManager.fetch()
 
         // Usage + Anthropic status are time-sensitive — poll every 5 min.
         Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { _ in
-            self.usageManager.fetchUsage()
+            self.store.refreshAll()
             self.statusManager.fetch()
         }
 
@@ -140,7 +150,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         checkAccessibilityPermissions()
 
         // Only register if user has the shortcut enabled
-        if usageManager.shortcutEnabled {
+        if store.accounts[0].shortcutEnabled {
             registerGlobalHotKey()
         }
     }
@@ -273,7 +283,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if let button = statusItem.button {
             // Force UI refresh by updating percentages
             DispatchQueue.main.async {
-                self.usageManager.updatePercentages()
+                self.store.accounts.forEach { $0.updatePercentages() }
             }
 
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
@@ -830,7 +840,10 @@ private struct ContentHeightKey: PreferenceKey {
 }
 
 struct UsageView: View {
-    @ObservedObject var usageManager: UsageManager
+    @ObservedObject var store: AccountsStore
+    // A temporary bridge: it keeps this view's body compiling unchanged while
+    // the per-account sections are written.
+    private var usageManager: UsageManager { store.accounts[0] }
     @ObservedObject var statusManager: StatusManager
     @ObservedObject var updateManager: UpdateManager
     @State private var sessionCookieInput: String = ""
@@ -870,7 +883,7 @@ struct UsageView: View {
                 measuredHeight = value
             }
             .onAppear {
-                if let savedCookie = UserDefaults.standard.string(forKey: "claude_session_cookie") {
+                if let savedCookie = UserDefaults.standard.string(forKey: accountKey(usageManager.slot, "cookie")) {
                     sessionCookieInput = String(savedCookie.prefix(20)) + "..."
                 }
                 usageManager.updatePercentages()

@@ -33,15 +33,22 @@ class UsageManager: ObservableObject {
     @Published var hasFetchedData: Bool = false
     @Published var isAccessibilityEnabled: Bool = false
     @Published var shortcutEnabled: Bool = true
+    @Published var name: String = ""
 
-    private var statusItem: NSStatusItem?
+    let slot: Int
     private var sessionCookie: String = ""
-    private weak var delegate: AppDelegate?
     private var lastNotifiedThreshold: Int = 0
 
-    init(statusItem: NSStatusItem?, delegate: AppDelegate? = nil) {
-        self.statusItem = statusItem
-        self.delegate = delegate
+    /// The manager no longer knows about NSStatusItem or AppDelegate: the menu
+    /// bar observes $sessionUsage instead. Keeping UI out of here is what lets
+    /// two of these exist without fighting over one status item.
+    var hasCookie: Bool { !sessionCookie.isEmpty }
+    var displayName: String { name.isEmpty ? "Account \(slot)" : name }
+
+    private func key(_ suffix: String) -> String { accountKey(slot, suffix) }
+
+    init(slot: Int) {
+        self.slot = slot
         loadSessionCookie()
         loadSettings()
         checkAccessibilityStatus()
@@ -52,7 +59,7 @@ class UsageManager: ObservableObject {
     }
 
     func loadSessionCookie() {
-        if let savedCookie = UserDefaults.standard.string(forKey: "claude_session_cookie") {
+        if let savedCookie = UserDefaults.standard.string(forKey: key("cookie")) {
             sessionCookie = savedCookie
         }
     }
@@ -87,13 +94,14 @@ class UsageManager: ObservableObject {
         } else {
             openAtLogin = UserDefaults.standard.bool(forKey: "open_at_login")
         }
-        lastNotifiedThreshold = UserDefaults.standard.integer(forKey: "last_notified_threshold")
+        lastNotifiedThreshold = UserDefaults.standard.integer(forKey: key("threshold"))
         // Default shortcut to enabled if not previously set
         if UserDefaults.standard.object(forKey: "shortcut_enabled") == nil {
             shortcutEnabled = true
         } else {
             shortcutEnabled = UserDefaults.standard.bool(forKey: "shortcut_enabled")
         }
+        name = UserDefaults.standard.string(forKey: key("name")) ?? ""
     }
 
     func saveSettings() {
@@ -101,6 +109,7 @@ class UsageManager: ObservableObject {
         UserDefaults.standard.set(statusNotificationsEnabled, forKey: "status_notifications_enabled")
         UserDefaults.standard.set(openAtLogin, forKey: "open_at_login")
         UserDefaults.standard.set(shortcutEnabled, forKey: "shortcut_enabled")
+        UserDefaults.standard.set(name, forKey: key("name"))
         UserDefaults.standard.synchronize()
     }
 
@@ -126,7 +135,7 @@ class UsageManager: ObservableObject {
     func saveSessionCookie(_ cookie: String) {
         NSLog("ClaudeUsage: Saving cookie, length: \(cookie.count)")
         sessionCookie = cookie
-        UserDefaults.standard.set(cookie, forKey: "claude_session_cookie")
+        UserDefaults.standard.set(cookie, forKey: key("cookie"))
         UserDefaults.standard.synchronize()
         NSLog("ClaudeUsage: Cookie saved successfully")
     }
@@ -134,7 +143,7 @@ class UsageManager: ObservableObject {
     func clearSessionCookie() {
         NSLog("ClaudeUsage: Clearing cookie")
         sessionCookie = ""
-        UserDefaults.standard.removeObject(forKey: "claude_session_cookie")
+        UserDefaults.standard.removeObject(forKey: key("cookie"))
         UserDefaults.standard.synchronize()
 
         // Reset all data
@@ -156,10 +165,9 @@ class UsageManager: ObservableObject {
         hasWeeklyFable = false
         errorMessage = nil
         lastNotifiedThreshold = 0
-        UserDefaults.standard.set(0, forKey: "last_notified_threshold")
-
-        // Update status bar to show 0%
-        delegate?.updateStatusIcon(percentage: 0)
+        // Per-slot: resetting the global key here would clear the other
+        // account's notification state as a side effect of clearing this one.
+        UserDefaults.standard.set(0, forKey: key("threshold"))
 
         NSLog("ClaudeUsage: Cookie cleared, data reset")
     }
@@ -402,13 +410,7 @@ class UsageManager: ObservableObject {
     }
 
     func updateStatusBar() {
-        let sessionPercent = Int((Double(sessionUsage) / Double(sessionLimit)) * 100)
-
-        // Update the icon color
-        delegate?.updateStatusIcon(percentage: sessionPercent)
-
-        // Check for notification thresholds
-        checkNotificationThresholds(percentage: sessionPercent)
+        checkNotificationThresholds(percentage: sessionUsage)
     }
 
     func checkNotificationThresholds(percentage: Int) {
@@ -423,7 +425,7 @@ class UsageManager: ObservableObject {
                                        lastNotified: lastNotifiedThreshold)
         if rearmed != lastNotifiedThreshold {
             lastNotifiedThreshold = rearmed
-            UserDefaults.standard.set(rearmed, forKey: "last_notified_threshold")
+            UserDefaults.standard.set(rearmed, forKey: key("threshold"))
             UserDefaults.standard.synchronize()
         }
     }
