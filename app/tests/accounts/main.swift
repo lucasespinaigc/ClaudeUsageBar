@@ -16,6 +16,19 @@ func freshDefaults(_ name: String) -> UserDefaults {
     return defaults
 }
 
+/// Pumps the main run loop briefly so a `DispatchQueue.main.async` block
+/// scheduled moments ago gets a chance to run. A plain command-line
+/// executable never drives its own run loop (no NSApplication, no
+/// dispatchMain()), so without this the deferred prefix recompute in
+/// AccountsStore's objectWillChange sink would never execute during a test.
+/// The timer just gives the run loop a reason not to return immediately.
+func flushMainQueue(for seconds: TimeInterval = 0.05) {
+    let timer = Timer(timeInterval: seconds, repeats: false) { _ in }
+    RunLoop.main.add(timer, forMode: .default)
+    RunLoop.main.run(until: Date().addingTimeInterval(seconds))
+    timer.invalidate()
+}
+
 // A 1.3.x install: the legacy keys, nothing under the slot keys.
 let legacy = freshDefaults("cub.test.store.legacy")
 legacy.set("legacy-cookie-value", forKey: "claude_session_cookie")
@@ -142,6 +155,50 @@ for name in ["cub.test.store.legacy", "cub.test.store.pair", "cub.test.store.vir
     UserDefaults(suiteName: name)?.removePersistentDomain(forName: name)
 }
 
+print("")
+print("notification prefixes")
+
+// One configured account: nothing to disambiguate, so the wording must stay
+// exactly what 1.3.x users already know.
+let soloPrefixDefaults = freshDefaults("cub.test.store.soloprefix")
+soloPrefixDefaults.set(accountsSchemaVersion, forKey: "accounts_schema_version")
+soloPrefixDefaults.set("cookie-1", forKey: "account_1_cookie")
+let soloPrefixStore = AccountsStore(defaults: soloPrefixDefaults)
+checkEqual(soloPrefixStore.accounts[0].notificationPrefix, "",
+           "a single configured account carries no notification prefix")
+checkEqual(notificationBody(percentage: 90, prefix: soloPrefixStore.accounts[0].notificationPrefix),
+           "You've reached 90% of your 5-hour session limit",
+           "single-account notification text matches the 1.3.x wording exactly")
+
+// Two configured accounts: each carries its own name.
+let pairPrefixDefaults = freshDefaults("cub.test.store.pairprefix")
+pairPrefixDefaults.set(accountsSchemaVersion, forKey: "accounts_schema_version")
+pairPrefixDefaults.set("cookie-1", forKey: "account_1_cookie")
+pairPrefixDefaults.set("cookie-2", forKey: "account_2_cookie")
+pairPrefixDefaults.set("Work", forKey: "account_1_name")
+pairPrefixDefaults.set("Personal", forKey: "account_2_name")
+let pairPrefixStore = AccountsStore(defaults: pairPrefixDefaults)
+checkEqual(pairPrefixStore.accounts[0].notificationPrefix, "Work",
+           "slot 1's prefix is its own name")
+checkEqual(pairPrefixStore.accounts[1].notificationPrefix, "Personal",
+           "slot 2's prefix is its own name")
+checkEqual(notificationBody(percentage: 90, prefix: pairPrefixStore.accounts[0].notificationPrefix),
+           "Work — you've reached 90% of your 5-hour session limit",
+           "a threshold notification names the account that crossed it")
+
+// Renaming an account updates the prefix it will use. objectWillChange fires
+// BEFORE the property write, so recomputing the prefixes synchronously inside
+// the sink would still see the OLD name; AccountsStore defers that recompute
+// to the next runloop turn instead (see Accounts.swift), which is why this
+// assertion needs a pumped run loop before it can observe the new value.
+pairPrefixStore.accounts[0].name = "Renamed"
+flushMainQueue()
+checkEqual(pairPrefixStore.accounts[0].notificationPrefix, "Renamed",
+           "renaming an account updates the prefix it will use")
+
+for name in ["cub.test.store.soloprefix", "cub.test.store.pairprefix"] {
+    UserDefaults(suiteName: name)?.removePersistentDomain(forName: name)
+}
 
 // MARK: - Menu bar icon geometry
 //

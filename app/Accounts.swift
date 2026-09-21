@@ -19,17 +19,39 @@ final class AccountsStore: ObservableObject {
         // republish, pasting a cookie into account 2 would not make its menu
         // bar item or its popover section appear — no error, no log, the UI
         // simply would not update.
+        //
+        // The same signal also drives the notification prefixes: saving a
+        // cookie, clearing one, or renaming an account can all change whether
+        // there is something to disambiguate, or what name to use.
         for account in accounts {
             account.objectWillChange
-                .sink { [weak self] _ in self?.objectWillChange.send() }
+                .sink { [weak self] _ in
+                    guard let self = self else { return }
+                    // Republish synchronously: SwiftUI expects willChange to
+                    // arrive before the render pass, and deferring it can drop
+                    // an update.
+                    self.objectWillChange.send()
+                    // The prefix, on the other hand, depends on the NEW value,
+                    // and objectWillChange fires before the property is written.
+                    DispatchQueue.main.async { self.refreshNotificationPrefixes() }
+                }
                 .store(in: &cancellables)
         }
+        refreshNotificationPrefixes()
     }
 
     /// Configured means "has a cookie" — one fact, nothing to desynchronise.
     var configured: [UsageManager] { accounts.filter { $0.hasCookie } }
 
     var showsBadges: Bool { configured.count > 1 }
+
+    /// Only prefix when there is something to disambiguate.
+    private func refreshNotificationPrefixes() {
+        let multiple = configured.count > 1
+        for account in accounts {
+            account.notificationPrefix = multiple ? account.displayName : ""
+        }
+    }
 
     func refreshAll() {
         for account in configured { account.fetchUsage() }

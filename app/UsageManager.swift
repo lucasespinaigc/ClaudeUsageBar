@@ -53,6 +53,10 @@ class UsageManager: ObservableObject {
     /// without ever putting the secret back into an editable field.
     var cookieSuffix: String { String(sessionCookie.suffix(6)) }
 
+    /// Set by AccountsStore. Empty with a single account, so its notification
+    /// text stays exactly what 1.3.x users already know.
+    var notificationPrefix: String = ""
+
     // MARK: - App-wide preferences
     //
     // These four are settings of the app, not of an account, so they are read
@@ -465,7 +469,7 @@ class UsageManager: ObservableObject {
     func sendNotification(percentage: Int, threshold: Int) {
         let notification = NSUserNotification()
         notification.title = "Claude Usage Alert"
-        notification.informativeText = "You've reached \(percentage)% of your 5-hour session limit"
+        notification.informativeText = notificationBody(percentage: percentage, prefix: notificationPrefix)
         notification.soundName = NSUserNotificationDefaultSoundName
 
         NSUserNotificationCenter.default.deliver(notification)
@@ -477,7 +481,7 @@ class UsageManager: ObservableObject {
 
         let notification = NSUserNotification()
         notification.title = "Claude Usage Alert"
-        notification.informativeText = "Test notification - You've reached 75% of your 5-hour session limit"
+        notification.informativeText = testNotificationBody(prefix: notificationPrefix)
         notification.soundName = NSUserNotificationDefaultSoundName
 
         NSUserNotificationCenter.default.deliver(notification)

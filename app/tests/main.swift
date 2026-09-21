@@ -149,6 +149,21 @@ checkEqual(dateSnapshot?.weekly?.resetsAt?.timeIntervalSince1970, 1790499600.0,
            "plain (non-fractional) timestamp parses to the exact expected instant")
 
 
+print("notificationBody / testNotificationBody")
+
+checkEqual(notificationBody(percentage: 90, prefix: ""),
+           "You've reached 90% of your 5-hour session limit",
+           "no prefix keeps the exact 1.3.x wording")
+checkEqual(notificationBody(percentage: 90, prefix: "Work"),
+           "Work — you've reached 90% of your 5-hour session limit",
+           "a prefix names the account and lower-cases the body's lead word")
+checkEqual(testNotificationBody(prefix: ""),
+           "Test notification - You've reached 75% of your 5-hour session limit",
+           "the test notification keeps its own wording with no prefix")
+checkEqual(testNotificationBody(prefix: "Personal"),
+           "Personal — Test notification - You've reached 75% of your 5-hour session limit",
+           "the test notification is prefixed the same way as a real one")
+
 print("migrateAccounts")
 
 func freshDefaults(_ name: String) -> UserDefaults {

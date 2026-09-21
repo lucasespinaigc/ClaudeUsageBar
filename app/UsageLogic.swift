@@ -27,6 +27,31 @@ func rearmedThreshold(percentage: Int,
     return lastNotified
 }
 
+// MARK: - Notification text
+//
+// Kept as pure functions, called from UsageManager.sendNotification and
+// .sendTestNotification rather than built inline, so the wording can be
+// asserted directly — the test harness cannot observe NSUserNotificationCenter.
+
+/// Text of a usage-threshold alert. Empty prefix is the single-account case:
+/// the exact 1.3.x wording, since there is nothing to disambiguate. A
+/// non-empty prefix lower-cases the body's lead word so "Work — you've
+/// reached..." reads as one sentence naming the account that crossed it.
+func notificationBody(percentage: Int, prefix: String) -> String {
+    let body = "You've reached \(percentage)% of your 5-hour session limit"
+    guard !prefix.isEmpty else { return body }
+    return "\(prefix) — \(body.prefix(1).lowercased() + body.dropFirst())"
+}
+
+/// Text of the Settings "Test Notification" button. Same prefixing rule as
+/// notificationBody, minus the lead-word lowercasing: "Test notification" is
+/// its own clause here, not the start of the account's sentence.
+func testNotificationBody(prefix: String) -> String {
+    let body = "Test notification - You've reached 75% of your 5-hour session limit"
+    guard !prefix.isEmpty else { return body }
+    return "\(prefix) — \(body)"
+}
+
 struct UsageSnapshot: Equatable {
     // "Bucket absent" and "bucket present with usage 0" must stay distinct
     // states all the way up to the manager: a partial/malformed payload that
