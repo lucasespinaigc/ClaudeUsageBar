@@ -304,6 +304,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self.store.accounts.forEach { $0.updatePercentages() }
         }
 
+        // Pin the content size before showing. NSPopover is positioned from the
+        // size it has at show() time, but an NSHostingController only reports
+        // its real height after a layout pass — so the popover was placed for
+        // the 320pt guess above, then grew to its true height afterwards. An
+        // NSWindow grows upward from its origin, so that growth pushed the top
+        // off the screen: measured at 1277 on an 1169pt display, clipping the
+        // title and the first usage bar.
+        if let contentView = popover.contentViewController?.view {
+            contentView.layoutSubtreeIfNeeded()
+            let fitting = contentView.fittingSize
+            if fitting.height > 1 {
+                popover.contentSize = NSSize(width: popover.contentSize.width, height: fitting.height)
+            }
+        }
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
 
         // Add event monitor to detect clicks outside the popover
