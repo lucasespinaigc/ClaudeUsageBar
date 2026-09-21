@@ -1,25 +1,5 @@
 import Foundation
 
-var failures = 0
-
-func check(_ condition: Bool, _ label: String) {
-    if condition {
-        print("  ok   \(label)")
-    } else {
-        print("  FAIL \(label)")
-        failures += 1
-    }
-}
-
-func checkEqual<T: Equatable>(_ actual: T, _ expected: T, _ label: String) {
-    if actual == expected {
-        print("  ok   \(label)")
-    } else {
-        print("  FAIL \(label): got \(actual), expected \(expected)")
-        failures += 1
-    }
-}
-
 print("highestCrossedThreshold")
 // The bug this replaces: a fresh install already at 95% walked [25,50,75,90]
 // and fired one notification per crossed threshold — four at once, eight with
@@ -237,10 +217,36 @@ checkEqual(globals.object(forKey: "usage_notifications_enabled") as? Bool, false
 checkEqual(globals.string(forKey: "appearance_mode"), "dark",
            "migration leaves appearance_mode alone")
 
+// An empty slot-1 cookie is not a configured account. No shipped 1.3.x build
+// writes that state, but an intermediate build of this branch can, and the
+// version guard means the copy gets exactly one attempt: skipping it here
+// would put the user's cookie permanently out of reach.
+let emptySlot = freshDefaults("cub.test.emptyslot")
+emptySlot.set("legacy-cookie", forKey: "claude_session_cookie")
+emptySlot.set("", forKey: "account_1_cookie")
+emptySlot.set(60, forKey: "last_notified_threshold")
+migrateAccounts(emptySlot)
+checkEqual(emptySlot.string(forKey: "account_1_cookie"), "legacy-cookie",
+           "an empty slot-1 cookie does not block the copy")
+checkEqual(emptySlot.integer(forKey: "account_1_threshold"), 60,
+           "the threshold rides along with an unblocked copy")
+
+// The other side of that predicate: what the user deleted stays deleted. The
+// version stamp is what guarantees it, since the cookie test alone would now
+// read an absent slot-1 cookie as "copy it again".
+let cleared = freshDefaults("cub.test.cleared")
+cleared.set("legacy-cookie", forKey: "claude_session_cookie")
+migrateAccounts(cleared)
+cleared.removeObject(forKey: "account_1_cookie")
+migrateAccounts(cleared)
+checkEqual(cleared.string(forKey: "account_1_cookie"), nil,
+           "a cookie the user cleared is not resurrected on the next launch")
+
 // These suites are scratch space for the assertions above; drop them so a test
 // run leaves nothing behind in the real preferences directory.
 for name in ["cub.test.upgrading", "cub.test.fresh", "cub.test.rerun",
-             "cub.test.empty", "cub.test.nothreshold", "cub.test.globals"] {
+             "cub.test.empty", "cub.test.nothreshold", "cub.test.globals",
+             "cub.test.emptyslot", "cub.test.cleared"] {
     UserDefaults(suiteName: name)?.removePersistentDomain(forName: name)
 }
 print("")

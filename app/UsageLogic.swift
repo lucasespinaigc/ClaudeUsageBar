@@ -117,8 +117,14 @@ func migrateAccounts(_ defaults: UserDefaults) {
         return
     }
 
+    // "Configured" means a non-empty cookie everywhere else (UsageManager.hasCookie),
+    // so it has to mean that here too. Treating an empty slot-1 string as
+    // already-configured would skip the copy, stamp the version anyway, and put
+    // the legacy cookie permanently out of reach: the version guard above means
+    // there is no second pass.
     let legacyCookie = defaults.string(forKey: "claude_session_cookie") ?? ""
-    if !legacyCookie.isEmpty, defaults.string(forKey: accountKey(1, "cookie")) == nil {
+    let slotCookie = defaults.string(forKey: accountKey(1, "cookie")) ?? ""
+    if !legacyCookie.isEmpty, slotCookie.isEmpty {
         defaults.set(legacyCookie, forKey: accountKey(1, "cookie"))
         defaults.set(defaults.integer(forKey: "last_notified_threshold"),
                      forKey: accountKey(1, "threshold"))

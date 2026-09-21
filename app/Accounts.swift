@@ -13,7 +13,7 @@ final class AccountsStore: ObservableObject {
         // after them would leave an upgrading user looking unconfigured and
         // asking for a cookie they already gave us.
         migrateAccounts(defaults)
-        accounts = Self.slots.map { UsageManager(slot: $0) }
+        accounts = Self.slots.map { UsageManager(slot: $0, defaults: defaults) }
 
         // A nested ObservableObject does not notify its parent. Without this
         // republish, pasting a cookie into account 2 would not make its menu

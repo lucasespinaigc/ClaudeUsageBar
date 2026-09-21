@@ -36,8 +36,16 @@ class UsageManager: ObservableObject {
     @Published var name: String = ""
 
     let slot: Int
-    private var sessionCookie: String = ""
+    // Published so that hasCookie announces itself: AccountsStore.configured is
+    // derived from it, and a cookie saved or cleared without an objectWillChange
+    // leaves the account list stale. Publishing at the source covers every
+    // mutation site, including ones not written yet.
+    @Published private var sessionCookie: String = ""
     private var lastNotifiedThreshold: Int = 0
+
+    /// Injected so the slot invariants can be driven against a scratch suite
+    /// instead of the real domain; production always gets .standard.
+    private let defaults: UserDefaults
 
     /// The manager no longer knows about NSStatusItem or AppDelegate: the menu
     /// bar observes $sessionUsage instead. Keeping UI out of here is what lets
@@ -47,8 +55,9 @@ class UsageManager: ObservableObject {
 
     private func key(_ suffix: String) -> String { accountKey(slot, suffix) }
 
-    init(slot: Int) {
+    init(slot: Int, defaults: UserDefaults = .standard) {
         self.slot = slot
+        self.defaults = defaults
         loadSessionCookie()
         loadSettings()
         checkAccessibilityStatus()
@@ -59,58 +68,58 @@ class UsageManager: ObservableObject {
     }
 
     func loadSessionCookie() {
-        if let savedCookie = UserDefaults.standard.string(forKey: key("cookie")) {
+        if let savedCookie = defaults.string(forKey: key("cookie")) {
             sessionCookie = savedCookie
         }
     }
 
     func loadSettings() {
         // Migrate from legacy single notifications_enabled flag (pre-v1.1) to split flags
-        let hasUsageKey  = UserDefaults.standard.object(forKey: "usage_notifications_enabled")  != nil
-        let hasStatusKey = UserDefaults.standard.object(forKey: "status_notifications_enabled") != nil
+        let hasUsageKey  = defaults.object(forKey: "usage_notifications_enabled")  != nil
+        let hasStatusKey = defaults.object(forKey: "status_notifications_enabled") != nil
 
         if !hasUsageKey || !hasStatusKey {
-            let legacyHasKey = UserDefaults.standard.object(forKey: "notifications_enabled") != nil
-            let legacyValue  = legacyHasKey ? UserDefaults.standard.bool(forKey: "notifications_enabled") : true
+            let legacyHasKey = defaults.object(forKey: "notifications_enabled") != nil
+            let legacyValue  = legacyHasKey ? defaults.bool(forKey: "notifications_enabled") : true
             if !hasUsageKey {
                 usageNotificationsEnabled = legacyValue
-                UserDefaults.standard.set(legacyValue, forKey: "usage_notifications_enabled")
+                defaults.set(legacyValue, forKey: "usage_notifications_enabled")
             }
             if !hasStatusKey {
                 statusNotificationsEnabled = legacyValue
-                UserDefaults.standard.set(legacyValue, forKey: "status_notifications_enabled")
+                defaults.set(legacyValue, forKey: "status_notifications_enabled")
             }
         }
         if hasUsageKey {
-            usageNotificationsEnabled = UserDefaults.standard.bool(forKey: "usage_notifications_enabled")
+            usageNotificationsEnabled = defaults.bool(forKey: "usage_notifications_enabled")
         }
         if hasStatusKey {
-            statusNotificationsEnabled = UserDefaults.standard.bool(forKey: "status_notifications_enabled")
+            statusNotificationsEnabled = defaults.bool(forKey: "status_notifications_enabled")
         }
 
         // Reflect the real system login-item state, not just a stored bool.
         if #available(macOS 13.0, *) {
             openAtLogin = (SMAppService.mainApp.status == .enabled)
         } else {
-            openAtLogin = UserDefaults.standard.bool(forKey: "open_at_login")
+            openAtLogin = defaults.bool(forKey: "open_at_login")
         }
-        lastNotifiedThreshold = UserDefaults.standard.integer(forKey: key("threshold"))
+        lastNotifiedThreshold = defaults.integer(forKey: key("threshold"))
         // Default shortcut to enabled if not previously set
-        if UserDefaults.standard.object(forKey: "shortcut_enabled") == nil {
+        if defaults.object(forKey: "shortcut_enabled") == nil {
             shortcutEnabled = true
         } else {
-            shortcutEnabled = UserDefaults.standard.bool(forKey: "shortcut_enabled")
+            shortcutEnabled = defaults.bool(forKey: "shortcut_enabled")
         }
-        name = UserDefaults.standard.string(forKey: key("name")) ?? ""
+        name = defaults.string(forKey: key("name")) ?? ""
     }
 
     func saveSettings() {
-        UserDefaults.standard.set(usageNotificationsEnabled,  forKey: "usage_notifications_enabled")
-        UserDefaults.standard.set(statusNotificationsEnabled, forKey: "status_notifications_enabled")
-        UserDefaults.standard.set(openAtLogin, forKey: "open_at_login")
-        UserDefaults.standard.set(shortcutEnabled, forKey: "shortcut_enabled")
-        UserDefaults.standard.set(name, forKey: key("name"))
-        UserDefaults.standard.synchronize()
+        defaults.set(usageNotificationsEnabled,  forKey: "usage_notifications_enabled")
+        defaults.set(statusNotificationsEnabled, forKey: "status_notifications_enabled")
+        defaults.set(openAtLogin, forKey: "open_at_login")
+        defaults.set(shortcutEnabled, forKey: "shortcut_enabled")
+        defaults.set(name, forKey: key("name"))
+        defaults.synchronize()
     }
 
     // Actually register/unregister the app as a macOS login item.
@@ -135,16 +144,16 @@ class UsageManager: ObservableObject {
     func saveSessionCookie(_ cookie: String) {
         NSLog("ClaudeUsage: Saving cookie, length: \(cookie.count)")
         sessionCookie = cookie
-        UserDefaults.standard.set(cookie, forKey: key("cookie"))
-        UserDefaults.standard.synchronize()
+        defaults.set(cookie, forKey: key("cookie"))
+        defaults.synchronize()
         NSLog("ClaudeUsage: Cookie saved successfully")
     }
 
     func clearSessionCookie() {
         NSLog("ClaudeUsage: Clearing cookie")
         sessionCookie = ""
-        UserDefaults.standard.removeObject(forKey: key("cookie"))
-        UserDefaults.standard.synchronize()
+        defaults.removeObject(forKey: key("cookie"))
+        defaults.synchronize()
 
         // Reset all data
         sessionUsage = 0
@@ -167,7 +176,7 @@ class UsageManager: ObservableObject {
         lastNotifiedThreshold = 0
         // Per-slot: resetting the global key here would clear the other
         // account's notification state as a side effect of clearing this one.
-        UserDefaults.standard.set(0, forKey: key("threshold"))
+        defaults.set(0, forKey: key("threshold"))
 
         NSLog("ClaudeUsage: Cookie cleared, data reset")
     }
@@ -425,8 +434,8 @@ class UsageManager: ObservableObject {
                                        lastNotified: lastNotifiedThreshold)
         if rearmed != lastNotifiedThreshold {
             lastNotifiedThreshold = rearmed
-            UserDefaults.standard.set(rearmed, forKey: key("threshold"))
-            UserDefaults.standard.synchronize()
+            defaults.set(rearmed, forKey: key("threshold"))
+            defaults.synchronize()
         }
     }
 

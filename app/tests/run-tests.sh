@@ -1,9 +1,27 @@
 #!/bin/bash
-# Compiles the Foundation-only logic together with the assert-based test main
-# and runs it. No SPM and no XCTest on purpose: build.sh stays untouched and
-# this runs in seconds with nothing installed.
+# Compiles the assert-based test mains and runs them. No SPM and no XCTest on
+# purpose: build.sh stays untouched and this runs in seconds with nothing
+# installed. Both targets must pass; set -e fails the script on the first that
+# does not.
 set -e
 cd "$(dirname "$0")/.."
-OUT="$(mktemp -d)/cub-tests"
-swiftc -o "$OUT" UsageLogic.swift tests/main.swift
-"$OUT"
+DIR="$(mktemp -d)"
+
+# Target 1: the Foundation-only logic — thresholds, payload parsing, and the
+# migration function itself.
+swiftc -o "$DIR/cub-tests" UsageLogic.swift tests/support.swift tests/main.swift
+"$DIR/cub-tests"
+
+# Target 2: the slot invariants, which need the manager and the store compiled
+# in. Above all "the migration runs before any manager reads its cookie" —
+# target 1 stays green no matter where that call sits.
+#
+# -suppress-warnings: this target recompiles UsageManager.swift, whose ~30
+# NSUserNotification deprecations would bury a FAIL line on every run. build.sh
+# is where warnings on app sources get reviewed; this script is for assertions.
+swiftc -o "$DIR/cub-accounts-tests" \
+    UsageLogic.swift UsageManager.swift Accounts.swift \
+    tests/support.swift tests/accounts/main.swift \
+    -framework SwiftUI -framework AppKit \
+    -suppress-warnings
+"$DIR/cub-accounts-tests"
