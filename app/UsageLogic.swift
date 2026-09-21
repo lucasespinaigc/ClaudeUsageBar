@@ -170,10 +170,10 @@ func accountKey(_ slot: Int, _ suffix: String) -> String { "account_\(slot)_\(su
 /// `accounts_schema_version` is ever lost — a manual `defaults delete`, or a
 /// pre-1.4 preferences restore — since the guard then reads it back as 0.
 ///
-/// A regression test used to catch this, going red the moment the constant
-/// moved to 3 (it lived in tests/main.swift, deleted along with the rest of
-/// that suite once this branch landed), so THIS COMMENT is now the only thing
-/// left to stop it. The structural fix, when a v2 -> v3 step is actually
+/// Assertions in tests/main.swift go red the moment this constant moves to 3.
+/// They are doing their job when that happens — do not delete them as stale.
+/// If that suite is ever removed, THIS COMMENT becomes the only thing left to
+/// stop it. The structural fix, when a v2 -> v3 step is actually
 /// needed: stop leaning on the outer range guard to scope this copy. Nest it
 /// in its own `if storedVersion < 2 { ... }` step, the same way any v3 logic
 /// must nest under `if storedVersion < 3 { ... }`, so each step only ever runs

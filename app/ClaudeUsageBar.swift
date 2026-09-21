@@ -808,6 +808,15 @@ class UpdateManager: ObservableObject {
 // Custom TextView that ensures keyboard commands work
 class PasteableNSTextView: NSTextView {
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        // AppKit dispatches performKeyEquivalent DOWN THE VIEW HIERARCHY, not to
+        // the first responder. With one of these in the popover that was
+        // harmless — the only instance was also the focused one. With one per
+        // account, the first in subview order claimed every Cmd+V and returned
+        // true, so the paste landed in account 1's field no matter which field
+        // the user had clicked. Acting only when focused restores the mapping.
+        guard window?.firstResponder === self else {
+            return super.performKeyEquivalent(with: event)
+        }
         if event.modifierFlags.contains(.command) {
             switch event.charactersIgnoringModifiers {
             case "v": // Paste
