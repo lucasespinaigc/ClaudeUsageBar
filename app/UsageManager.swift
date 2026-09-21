@@ -30,6 +30,10 @@ class UsageManager: ObservableObject {
     @Published var hasFetchedData: Bool = false
     @Published var isAccessibilityEnabled: Bool = false
     @Published var name: String = ""
+    /// The account's claude.ai address, fetched once per cookie from
+    /// /api/bootstrap. Two cookies look identical to a human, so without this
+    /// there is no way to tell which slot holds which account.
+    @Published var email: String = ""
 
     let slot: Int
     // Published so that hasCookie announces itself: AccountsStore.configured is
@@ -64,7 +68,11 @@ class UsageManager: ObservableObject {
     /// could type anything after it.
     var displayName: String {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? "Account \(slot)" : trimmed
+        if !trimmed.isEmpty { return trimmed }
+        // A typed name always wins; the address is only a better default than
+        // "Account 2". Idea and endpoint from @jdsoliveiraa's PR #102.
+        if !email.isEmpty { return email }
+        return "Account \(slot)"
     }
 
     /// Last characters of the saved cookie, enough to tell two accounts apart
@@ -168,12 +176,14 @@ class UsageManager: ObservableObject {
 
         lastNotifiedThreshold = defaults.integer(forKey: key("threshold"))
         name = defaults.string(forKey: key("name")) ?? ""
+        email = defaults.string(forKey: key("email")) ?? ""
     }
 
     /// Only the account-scoped settings: the app-wide flags write themselves
     /// through on assignment, so there is no snapshot here left to flush.
     func saveSettings() {
         defaults.set(name, forKey: key("name"))
+        defaults.set(email, forKey: key("email"))
         defaults.synchronize()
     }
 
@@ -200,6 +210,10 @@ class UsageManager: ObservableObject {
         NSLog("ClaudeUsage: Saving cookie, length: \(cookie.count)")
         sessionCookie = cookie
         defaults.set(cookie, forKey: key("cookie"))
+        // A new cookie may be a different account entirely, so the old address
+        // must not survive it.
+        email = ""
+        defaults.removeObject(forKey: key("email"))
         defaults.synchronize()
         NSLog("ClaudeUsage: Cookie saved successfully")
     }
@@ -208,6 +222,8 @@ class UsageManager: ObservableObject {
         NSLog("ClaudeUsage: Clearing cookie")
         sessionCookie = ""
         defaults.removeObject(forKey: key("cookie"))
+        email = ""
+        defaults.removeObject(forKey: key("email"))
 
         // Clear is the only revocation gesture the UI offers, so it must leave
         // no copy of the secret behind. Slot 1's cookie may have been copied
@@ -256,6 +272,38 @@ class UsageManager: ObservableObject {
         NSLog("ClaudeUsage: Cookie cleared, data reset")
     }
 
+    /// Reads the account's address from /api/bootstrap so the two slots can be
+    /// told apart. Runs once per cookie: the address is persisted, and a cookie
+    /// change clears it so the next fetch re-labels.
+    ///
+    /// Approach and endpoint adopted from @jdsoliveiraa's PR #102 on the
+    /// upstream repo, which named accounts this way first.
+    func fetchAccountEmail() {
+        guard hasCookie, email.isEmpty,
+              let url = URL(string: "https://claude.ai/api/bootstrap") else { return }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue(sessionCookie, forHTTPHeaderField: "Cookie")
+        request.setValue("*/*", forHTTPHeaderField: "Accept")
+        request.setValue("https://claude.ai", forHTTPHeaderField: "Referer")
+        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", forHTTPHeaderField: "User-Agent")
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, _, _ in
+            guard let data = data,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let account = json["account"] as? [String: Any],
+                  let address = (account["email_address"] as? String) ?? (account["full_name"] as? String),
+                  !address.isEmpty else { return }
+            DispatchQueue.main.async {
+                // The cookie may have been cleared while this was in flight.
+                guard let self = self, self.hasCookie, self.email.isEmpty else { return }
+                self.email = address
+                self.defaults.set(address, forKey: self.key("email"))
+            }
+        }.resume()
+    }
+
     func fetchOrganizationId(completion: @escaping (String?) -> Void) {
         // Get org ID from the lastActiveOrg cookie value
         let cookieParts = sessionCookie.components(separatedBy: ";")
@@ -296,6 +344,8 @@ class UsageManager: ObservableObject {
     }
 
     func fetchUsage() {
+        fetchAccountEmail()
+
         guard !sessionCookie.isEmpty else {
             DispatchQueue.main.async {
                 self.errorMessage = "Session cookie not set"

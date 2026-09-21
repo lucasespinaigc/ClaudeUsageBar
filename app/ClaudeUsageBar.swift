@@ -1288,6 +1288,16 @@ struct UsageView: View {
                                 Text("Cookie saved ••••\(account.cookieSuffix)")
                                     .font(.caption2)
                                     .foregroundColor(Color.secondaryText)
+                                // Two cookies are indistinguishable by eye, so the
+                                // address is the only way to tell which claude.ai
+                                // account a slot actually holds.
+                                if !account.email.isEmpty {
+                                    Text(account.email)
+                                        .font(.caption2)
+                                        .foregroundColor(Color.secondaryText)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                }
                             }
 
                             // An account with no cookie renders no section in the
