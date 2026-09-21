@@ -55,11 +55,11 @@ let free = payload("""
  "seven_day": {"utilization": 22.0, "resets_at": "2026-09-27T09:00:00.000000Z"}}
 """)
 let freeSnapshot = parseUsagePayload(free)
-checkEqual(freeSnapshot?.sessionUsage, 45, "free: session utilization")
-checkEqual(freeSnapshot?.weeklyUsage, 22, "free: weekly utilization")
-checkEqual(freeSnapshot?.hasWeeklySonnet, false, "free: no sonnet bucket")
-checkEqual(freeSnapshot?.hasWeeklyFable, false, "free: no fable bucket")
-check(freeSnapshot?.sessionResetsAt != nil, "free: session reset parsed")
+checkEqual(freeSnapshot?.session?.usage, 45, "free: session utilization")
+checkEqual(freeSnapshot?.weekly?.usage, 22, "free: weekly utilization")
+checkEqual(freeSnapshot?.sonnet != nil, false, "free: no sonnet bucket")
+checkEqual(freeSnapshot?.fable != nil, false, "free: no fable bucket")
+check(freeSnapshot?.session?.resetsAt != nil, "free: session reset parsed")
 
 // Pro plan: adds the seven_day_sonnet bucket.
 let pro = payload("""
@@ -68,8 +68,8 @@ let pro = payload("""
  "seven_day_sonnet": {"utilization": 12.0, "resets_at": "2026-09-27T09:00:00.000000Z"}}
 """)
 let proSnapshot = parseUsagePayload(pro)
-checkEqual(proSnapshot?.hasWeeklySonnet, true, "pro: sonnet bucket detected")
-checkEqual(proSnapshot?.weeklySonnetUsage, 12, "pro: sonnet utilization")
+checkEqual(proSnapshot?.sonnet != nil, true, "pro: sonnet bucket detected")
+checkEqual(proSnapshot?.sonnet?.usage, 12, "pro: sonnet utilization")
 
 // Fable is not a top-level key: it is a model-scoped entry in `limits`.
 let fableInt = payload("""
@@ -78,8 +78,8 @@ let fableInt = payload("""
  "limits": [{"scope": {"model": {"display_name": "Fable"}}, "percent": 7,
              "resets_at": "2026-09-27T09:00:00.000000Z"}]}
 """)
-checkEqual(parseUsagePayload(fableInt)?.hasWeeklyFable, true, "fable: detected in limits")
-checkEqual(parseUsagePayload(fableInt)?.weeklyFableUsage, 7, "fable: percent as Int")
+checkEqual(parseUsagePayload(fableInt)?.fable != nil, true, "fable: detected in limits")
+checkEqual(parseUsagePayload(fableInt)?.fable?.usage, 7, "fable: percent as Int")
 
 // The same field comes back as a Double on other payloads, so neither
 // `as? Int` nor `as? Double` alone is enough.
@@ -88,7 +88,7 @@ let fableDouble = payload("""
  "seven_day": {"utilization": 5.0},
  "limits": [{"scope": {"model": {"display_name": "Fable"}}, "percent": 7.8}]}
 """)
-checkEqual(parseUsagePayload(fableDouble)?.weeklyFableUsage, 7, "fable: percent as Double")
+checkEqual(parseUsagePayload(fableDouble)?.fable?.usage, 7, "fable: percent as Double")
 
 // A limits array without Fable must not turn the bar on.
 let otherModel = payload("""
@@ -96,7 +96,7 @@ let otherModel = payload("""
  "seven_day": {"utilization": 5.0},
  "limits": [{"scope": {"model": {"display_name": "Opus"}}, "percent": 50}]}
 """)
-checkEqual(parseUsagePayload(otherModel)?.hasWeeklyFable, false, "fable: other models ignored")
+checkEqual(parseUsagePayload(otherModel)?.fable != nil, false, "fable: other models ignored")
 
 // claude.ai does not send fractional seconds on every field. The pre-1.4
 // parser only accepted the fractional form and silently dropped the rest.
@@ -104,10 +104,69 @@ let noFraction = payload("""
 {"five_hour": {"utilization": 5.0, "resets_at": "2026-09-21T18:30:00Z"},
  "seven_day": {"utilization": 5.0}}
 """)
-check(parseUsagePayload(noFraction)?.sessionResetsAt != nil,
+check(parseUsagePayload(noFraction)?.session?.resetsAt != nil,
       "dates without fractional seconds still parse")
 
 checkEqual(parseUsagePayload(payload("not json")), nil, "garbage returns nil")
+
+// --- Partial/malformed payloads must not corrupt previously-good state. ---
+// A zeroed sessionUsage flows into checkNotificationThresholds, which rearms
+// every notification threshold — so "bucket absent" must stay distinguishable
+// from "bucket present with usage 0" all the way up to the manager, which
+// only copies a bucket onto its @Published properties when it is non-nil.
+
+// 1. A key that's entirely absent leaves that bucket nil (manager writes nothing).
+let missingFiveHour = payload("""
+{"seven_day": {"utilization": 5.0}}
+""")
+checkEqual(parseUsagePayload(missingFiveHour)?.session, nil,
+           "missing five_hour key leaves session bucket nil")
+
+// 2. An empty object is a successful read with no data, not a wipe: the
+// snapshot itself must be non-nil (distinct from the "not json" case above)
+// while every bucket stays nil.
+let emptyPayload = payload("{}")
+let emptySnapshot = parseUsagePayload(emptyPayload)
+check(emptySnapshot != nil, "empty payload still parses (success with no data, not garbage)")
+checkEqual(emptySnapshot?.session, nil, "empty payload: session bucket nil")
+checkEqual(emptySnapshot?.weekly, nil, "empty payload: weekly bucket nil")
+checkEqual(emptySnapshot?.sonnet, nil, "empty payload: sonnet bucket nil")
+checkEqual(emptySnapshot?.fable, nil, "empty payload: fable bucket nil")
+
+// 3. A bucket present with an unparseable usage value stays nil rather than
+// collapsing to 0 — a zeroed session bucket is exactly the shape that would
+// rearm notification thresholds on garbage data, which is the bug this
+// struct exists to prevent. A sibling bucket in the same payload still
+// parses on its own.
+let malformedUtilization = payload("""
+{"five_hour": {"utilization": "oops"}, "seven_day": {"utilization": 5}}
+""")
+let malformedSnapshot = parseUsagePayload(malformedUtilization)
+checkEqual(malformedSnapshot?.session, nil,
+           "unparseable utilization leaves the bucket nil, not zeroed")
+checkEqual(malformedSnapshot?.weekly?.usage, 5,
+           "a sibling bucket still parses independently of a malformed one")
+
+// 4. Every existing fixture above uses a "45.0"-style Double; a bare Int
+// must parse too, since Int-or-Double is authorized for `utilization`.
+let bareIntUtilization = payload("""
+{"five_hour": {"utilization": 45}}
+""")
+checkEqual(parseUsagePayload(bareIntUtilization)?.session?.usage, 45,
+           "utilization as a bare Int parses")
+
+// 5. Assert the actual Date value, not just non-nil — a timezone bug would
+// still produce *a* Date and pass a `!= nil` check silently. Expected epoch
+// seconds computed independently with `date -u -j -f "%Y-%m-%dT%H:%M:%SZ"`.
+let dateValues = payload("""
+{"five_hour": {"utilization": 1.0, "resets_at": "2026-09-21T18:30:00.250000Z"},
+ "seven_day": {"utilization": 1.0, "resets_at": "2026-09-27T09:00:00Z"}}
+""")
+let dateSnapshot = parseUsagePayload(dateValues)
+checkEqual(dateSnapshot?.session?.resetsAt?.timeIntervalSince1970, 1790015400.25,
+           "fractional-seconds timestamp parses to the exact expected instant")
+checkEqual(dateSnapshot?.weekly?.resetsAt?.timeIntervalSince1970, 1790499600.0,
+           "plain (non-fractional) timestamp parses to the exact expected instant")
 
 print("")
 print(failures == 0 ? "PASS" : "\(failures) FAILURE(S)")

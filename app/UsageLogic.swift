@@ -28,16 +28,18 @@ func rearmedThreshold(percentage: Int,
 }
 
 struct UsageSnapshot: Equatable {
-    var sessionUsage = 0
-    var sessionResetsAt: Date?
-    var weeklyUsage = 0
-    var weeklyResetsAt: Date?
-    var hasWeeklySonnet = false
-    var weeklySonnetUsage = 0
-    var weeklySonnetResetsAt: Date?
-    var hasWeeklyFable = false
-    var weeklyFableUsage = 0
-    var weeklyFableResetsAt: Date?
+    // "Bucket absent" and "bucket present with usage 0" must stay distinct
+    // states all the way up to the manager: a partial/malformed payload that
+    // collapsed a real reading to 0 would rearm every notification threshold
+    // on the next healthy poll (see checkNotificationThresholds).
+    struct Bucket: Equatable {
+        var usage: Int
+        var resetsAt: Date?
+    }
+    var session: Bucket?
+    var weekly: Bucket?
+    var sonnet: Bucket?
+    var fable: Bucket?
 }
 
 func parseUsagePayload(_ data: Data) -> UsageSnapshot? {
@@ -46,20 +48,9 @@ func parseUsagePayload(_ data: Data) -> UsageSnapshot? {
     }
 
     var snapshot = UsageSnapshot()
-
-    if let fiveHour = json["five_hour"] as? [String: Any] {
-        snapshot.sessionUsage = intValue(fiveHour["utilization"]) ?? 0
-        snapshot.sessionResetsAt = isoDate(fiveHour["resets_at"] as? String)
-    }
-    if let sevenDay = json["seven_day"] as? [String: Any] {
-        snapshot.weeklyUsage = intValue(sevenDay["utilization"]) ?? 0
-        snapshot.weeklyResetsAt = isoDate(sevenDay["resets_at"] as? String)
-    }
-    if let sonnet = json["seven_day_sonnet"] as? [String: Any] {
-        snapshot.hasWeeklySonnet = true
-        snapshot.weeklySonnetUsage = intValue(sonnet["utilization"]) ?? 0
-        snapshot.weeklySonnetResetsAt = isoDate(sonnet["resets_at"] as? String)
-    }
+    snapshot.session = bucket(from: json["five_hour"] as? [String: Any], usageKey: "utilization")
+    snapshot.weekly = bucket(from: json["seven_day"] as? [String: Any], usageKey: "utilization")
+    snapshot.sonnet = bucket(from: json["seven_day_sonnet"] as? [String: Any], usageKey: "utilization")
 
     // Fable is not a top-level key like seven_day_sonnet: it arrives as a
     // model-scoped weekly limit inside `limits`.
@@ -69,12 +60,24 @@ func parseUsagePayload(_ data: Data) -> UsageSnapshot? {
            let model = scope?["model"] as? [String: Any]
            return (model?["display_name"] as? String) == "Fable"
        }) {
-        snapshot.hasWeeklyFable = true
-        snapshot.weeklyFableUsage = intValue(fable["percent"]) ?? 0
-        snapshot.weeklyFableResetsAt = isoDate(fable["resets_at"] as? String)
+        snapshot.fable = bucket(from: fable, usageKey: "percent")
     }
 
     return snapshot
+}
+
+/// Builds a bucket only when its usage value is present and parses; a
+/// present-but-unparseable value (or a missing top-level key) yields nil
+/// rather than a 0-usage bucket, so the manager leaves the previous reading
+/// in place instead of writing a value that reads as "usage just dropped to
+/// zero" and rearms notification thresholds.
+///
+/// A bucket that IS present clears resetsAt to nil when its own resets_at is
+/// missing/unparseable, rather than keeping a stale date — showing an
+/// outdated reset time indefinitely is worse than showing none.
+private func bucket(from dict: [String: Any]?, usageKey: String) -> UsageSnapshot.Bucket? {
+    guard let dict = dict, let usage = intValue(dict[usageKey]) else { return nil }
+    return UsageSnapshot.Bucket(usage: usage, resetsAt: isoDate(dict["resets_at"] as? String))
 }
 
 /// `utilization` and `percent` decode as Int or Double depending on the

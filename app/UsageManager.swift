@@ -365,20 +365,35 @@ class UsageManager: ObservableObject {
             return
         }
 
-        sessionUsage = snapshot.sessionUsage
-        sessionLimit = 100
-        sessionResetsAt = snapshot.sessionResetsAt
-        weeklyUsage = snapshot.weeklyUsage
-        weeklyLimit = 100
-        weeklyResetsAt = snapshot.weeklyResetsAt
-        hasWeeklySonnet = snapshot.hasWeeklySonnet
-        weeklySonnetUsage = snapshot.weeklySonnetUsage
-        weeklySonnetLimit = 100
-        weeklySonnetResetsAt = snapshot.weeklySonnetResetsAt
-        hasWeeklyFable = snapshot.hasWeeklyFable
-        weeklyFableUsage = snapshot.weeklyFableUsage
-        weeklyFableLimit = 100
-        weeklyFableResetsAt = snapshot.weeklyFableResetsAt
+        // Only copy a bucket onto published state when it's present: a
+        // partial/malformed payload must retain the previously-good reading
+        // instead of zeroing it out, since a zeroed sessionUsage would rearm
+        // every notification threshold on the next healthy poll.
+        if let session = snapshot.session {
+            sessionUsage = session.usage
+            sessionLimit = 100
+            sessionResetsAt = session.resetsAt
+        }
+        if let weekly = snapshot.weekly {
+            weeklyUsage = weekly.usage
+            weeklyLimit = 100
+            weeklyResetsAt = weekly.resetsAt
+        }
+        // hasWeeklySonnet/hasWeeklyFable always track the latest read (not
+        // sticky), matching the pre-Task-3 behavior of resetting to false
+        // the moment the plan-scoped key stops appearing in the payload.
+        hasWeeklySonnet = snapshot.sonnet != nil
+        if let sonnet = snapshot.sonnet {
+            weeklySonnetUsage = sonnet.usage
+            weeklySonnetLimit = 100
+            weeklySonnetResetsAt = sonnet.resetsAt
+        }
+        hasWeeklyFable = snapshot.fable != nil
+        if let fable = snapshot.fable {
+            weeklyFableUsage = fable.usage
+            weeklyFableLimit = 100
+            weeklyFableResetsAt = fable.resetsAt
+        }
 
         lastUpdated = Date()
         errorMessage = nil
