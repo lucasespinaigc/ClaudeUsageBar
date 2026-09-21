@@ -91,7 +91,53 @@ checkEqual(two.accounts[0].displayName, "Work", "a named account displays its na
 checkEqual(two.accounts[1].displayName, "Account 2", "an unnamed account displays its slot name")
 checkEqual(pair.string(forKey: "account_2_name"), nil, "naming slot 1 does not write slot 2's name")
 
-for name in ["cub.test.store.legacy", "cub.test.store.pair"] {
+print("app-wide preferences are shared, not copied")
+
+// Notifications, login item and shortcut are settings of the app, not of an
+// account. Kept as a @Published copy loaded in each manager's init, unticking
+// "Enable Usage Notifications" wrote slot 1 and the shared key while slot 2
+// held its stale `true` and went on notifying until the next launch. So the
+// assertion that matters is that the *other* manager sees the change without
+// being rebuilt.
+two.accounts[0].usageNotificationsEnabled = false
+checkEqual(two.accounts[1].usageNotificationsEnabled, false,
+           "disabling usage notifications on slot 1 is visible from slot 2")
+checkEqual(pair.bool(forKey: "usage_notifications_enabled"), false,
+           "the flag lands on the one shared key")
+
+// And the guard reads it at the point of use: a 95% reading on slot 2 must
+// bail out before notifying, which shows up as its threshold never advancing.
+// With an init-time snapshot this wrote 90 and fired an alert.
+two.accounts[1].checkNotificationThresholds(percentage: 95)
+checkEqual(pair.integer(forKey: "account_2_threshold"), 0,
+           "a reading on a muted account announces nothing and records nothing")
+
+two.accounts[0].usageNotificationsEnabled = true
+checkEqual(two.accounts[1].usageNotificationsEnabled, true,
+           "re-enabling on slot 1 is visible from slot 2")
+
+two.accounts[1].statusNotificationsEnabled = false
+checkEqual(two.accounts[0].statusNotificationsEnabled, false,
+           "status notifications are shared in the other direction too")
+
+two.accounts[1].shortcutEnabled = false
+checkEqual(two.accounts[0].shortcutEnabled, false, "the shortcut flag is shared")
+
+// An unwritten key must read back as the shipped default, not as false.
+let virgin = freshDefaults("cub.test.store.virgin")
+let solo = UsageManager(slot: 1, defaults: virgin)
+checkEqual(solo.usageNotificationsEnabled, true, "usage notifications default to on")
+checkEqual(solo.statusNotificationsEnabled, true, "status notifications default to on")
+checkEqual(solo.shortcutEnabled, true, "the shortcut defaults to on")
+
+// The popover shows this instead of the cookie: enough to tell two accounts
+// apart, never enough to be pasted back as one.
+solo.saveSessionCookie("anthropic-device-id=abc; sessionKey=sk-xyz123")
+checkEqual(solo.cookieSuffix, "xyz123", "cookieSuffix is the last 6 characters")
+solo.clearSessionCookie()
+checkEqual(solo.cookieSuffix, "", "a cleared account has no suffix to show")
+
+for name in ["cub.test.store.legacy", "cub.test.store.pair", "cub.test.store.virgin"] {
     UserDefaults(suiteName: name)?.removePersistentDomain(forName: name)
 }
 

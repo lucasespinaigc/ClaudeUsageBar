@@ -25,14 +25,10 @@ class UsageManager: ObservableObject {
     @Published var lastUpdated: Date = Date()
     @Published var isLoading: Bool = false
     @Published var errorMessage: String?
-    @Published var usageNotificationsEnabled: Bool = true
-    @Published var statusNotificationsEnabled: Bool = true
-    @Published var openAtLogin: Bool = false
     @Published var hasWeeklySonnet: Bool = false
     @Published var hasWeeklyFable: Bool = false
     @Published var hasFetchedData: Bool = false
     @Published var isAccessibilityEnabled: Bool = false
-    @Published var shortcutEnabled: Bool = true
     @Published var name: String = ""
 
     let slot: Int
@@ -52,6 +48,54 @@ class UsageManager: ObservableObject {
     /// two of these exist without fighting over one status item.
     var hasCookie: Bool { !sessionCookie.isEmpty }
     var displayName: String { name.isEmpty ? "Account \(slot)" : name }
+
+    /// Last characters of the saved cookie, enough to tell two accounts apart
+    /// without ever putting the secret back into an editable field.
+    var cookieSuffix: String { String(sessionCookie.suffix(6)) }
+
+    // MARK: - App-wide preferences
+    //
+    // These four are settings of the app, not of an account, so they are read
+    // from and written to UserDefaults at the point of use instead of being
+    // cached per manager. Held as @Published copies loaded in init, each
+    // manager owned its own snapshot: unticking "Enable Usage Notifications"
+    // wrote slot 1 and the shared key, slot 2 kept its stale `true`, and
+    // account 2 went on notifying until the next launch. With no second copy
+    // there is nothing left to go stale.
+
+    var usageNotificationsEnabled: Bool {
+        get { defaults.object(forKey: "usage_notifications_enabled") as? Bool ?? true }
+        set { setGlobalFlag(newValue, forKey: "usage_notifications_enabled") }
+    }
+
+    var statusNotificationsEnabled: Bool {
+        get { defaults.object(forKey: "status_notifications_enabled") as? Bool ?? true }
+        set { setGlobalFlag(newValue, forKey: "status_notifications_enabled") }
+    }
+
+    var shortcutEnabled: Bool {
+        get { defaults.object(forKey: "shortcut_enabled") as? Bool ?? true }
+        set { setGlobalFlag(newValue, forKey: "shortcut_enabled") }
+    }
+
+    var openAtLogin: Bool {
+        // The real login-item registration wins over the stored bool: the user
+        // can remove the item in System Settings without telling us.
+        get {
+            if #available(macOS 13.0, *) { return SMAppService.mainApp.status == .enabled }
+            return defaults.bool(forKey: "open_at_login")
+        }
+        set { setGlobalFlag(newValue, forKey: "open_at_login") }
+    }
+
+    /// Published by hand because these are computed: without it the Settings
+    /// toggles would write the key and then redraw from their own pre-write
+    /// read, showing the checkbox snapping back.
+    private func setGlobalFlag(_ value: Bool, forKey key: String) {
+        objectWillChange.send()
+        defaults.set(value, forKey: key)
+        defaults.synchronize()
+    }
 
     private func key(_ suffix: String) -> String { accountKey(slot, suffix) }
 
@@ -74,7 +118,8 @@ class UsageManager: ObservableObject {
     }
 
     func loadSettings() {
-        // Migrate from legacy single notifications_enabled flag (pre-v1.1) to split flags
+        // Migrate the legacy single notifications_enabled flag (pre-v1.1) into
+        // the split keys. Idempotent, so the second manager is a no-op.
         let hasUsageKey  = defaults.object(forKey: "usage_notifications_enabled")  != nil
         let hasStatusKey = defaults.object(forKey: "status_notifications_enabled") != nil
 
@@ -82,42 +127,20 @@ class UsageManager: ObservableObject {
             let legacyHasKey = defaults.object(forKey: "notifications_enabled") != nil
             let legacyValue  = legacyHasKey ? defaults.bool(forKey: "notifications_enabled") : true
             if !hasUsageKey {
-                usageNotificationsEnabled = legacyValue
                 defaults.set(legacyValue, forKey: "usage_notifications_enabled")
             }
             if !hasStatusKey {
-                statusNotificationsEnabled = legacyValue
                 defaults.set(legacyValue, forKey: "status_notifications_enabled")
             }
         }
-        if hasUsageKey {
-            usageNotificationsEnabled = defaults.bool(forKey: "usage_notifications_enabled")
-        }
-        if hasStatusKey {
-            statusNotificationsEnabled = defaults.bool(forKey: "status_notifications_enabled")
-        }
 
-        // Reflect the real system login-item state, not just a stored bool.
-        if #available(macOS 13.0, *) {
-            openAtLogin = (SMAppService.mainApp.status == .enabled)
-        } else {
-            openAtLogin = defaults.bool(forKey: "open_at_login")
-        }
         lastNotifiedThreshold = defaults.integer(forKey: key("threshold"))
-        // Default shortcut to enabled if not previously set
-        if defaults.object(forKey: "shortcut_enabled") == nil {
-            shortcutEnabled = true
-        } else {
-            shortcutEnabled = defaults.bool(forKey: "shortcut_enabled")
-        }
         name = defaults.string(forKey: key("name")) ?? ""
     }
 
+    /// Only the account-scoped settings: the app-wide flags write themselves
+    /// through on assignment, so there is no snapshot here left to flush.
     func saveSettings() {
-        defaults.set(usageNotificationsEnabled,  forKey: "usage_notifications_enabled")
-        defaults.set(statusNotificationsEnabled, forKey: "status_notifications_enabled")
-        defaults.set(openAtLogin, forKey: "open_at_login")
-        defaults.set(shortcutEnabled, forKey: "shortcut_enabled")
         defaults.set(name, forKey: key("name"))
         defaults.synchronize()
     }
