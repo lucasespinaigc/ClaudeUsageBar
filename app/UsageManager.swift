@@ -488,32 +488,18 @@ class UsageManager: ObservableObject {
     }
 
     func checkNotificationThresholds(percentage: Int) {
-        NSLog("🔔 Checking notifications: percentage=\(percentage)%, enabled=\(usageNotificationsEnabled), lastNotified=\(lastNotifiedThreshold)%")
+        guard usageNotificationsEnabled else { return }
 
-        guard usageNotificationsEnabled else {
-            NSLog("⚠️ Usage notifications disabled")
-            return
+        if let threshold = highestCrossedThreshold(percentage: percentage,
+                                                   lastNotified: lastNotifiedThreshold) {
+            sendNotification(percentage: percentage, threshold: threshold)
         }
 
-        let thresholds = [25, 50, 75, 90]
-
-        for threshold in thresholds {
-            if percentage >= threshold && lastNotifiedThreshold < threshold {
-                NSLog("📬 Sending notification for \(threshold)% threshold")
-                sendNotification(percentage: percentage, threshold: threshold)
-                lastNotifiedThreshold = threshold
-                // Persist the threshold
-                UserDefaults.standard.set(lastNotifiedThreshold, forKey: "last_notified_threshold")
-                UserDefaults.standard.synchronize()
-            }
-        }
-
-        // Reset if usage drops below current threshold
-        if percentage < lastNotifiedThreshold {
-            let newThreshold = thresholds.filter { $0 <= percentage }.last ?? 0
-            NSLog("🔄 Resetting notification threshold from \(lastNotifiedThreshold)% to \(newThreshold)%")
-            lastNotifiedThreshold = newThreshold
-            UserDefaults.standard.set(lastNotifiedThreshold, forKey: "last_notified_threshold")
+        let rearmed = rearmedThreshold(percentage: percentage,
+                                       lastNotified: lastNotifiedThreshold)
+        if rearmed != lastNotifiedThreshold {
+            lastNotifiedThreshold = rearmed
+            UserDefaults.standard.set(rearmed, forKey: "last_notified_threshold")
             UserDefaults.standard.synchronize()
         }
     }
