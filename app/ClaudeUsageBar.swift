@@ -1126,10 +1126,25 @@ struct UsageView: View {
                 }
             }
 
+            // Gated on `configured`, not on `hasFetchedData`: Refresh is the way
+            // out of a failed fetch, so it has to stay reachable exactly when the
+            // fetch did not work. Only the label to its left is conditional.
             if !store.configured.isEmpty {
                 Divider()
                 HStack {
-                    if let latest = store.configured.map({ $0.lastUpdated }).max() {
+                    if store.configured.contains(where: { $0.isLoading }) {
+                        Text("Fetching…")
+                            .font(.caption)
+                            .foregroundColor(Color.secondaryText)
+                    } else if let latest = store.configured
+                        .filter({ $0.hasFetchedData })
+                        .map({ $0.lastUpdated }).max() {
+                        // Only accounts that actually parsed a payload count.
+                        // lastUpdated is seeded to Date() at init and moved only on
+                        // a successful parse, so an expired cookie or an offline
+                        // machine used to render the launch time as though a fetch
+                        // had just succeeded — and drift further from the truth the
+                        // longer the app stayed open.
                         Text("Last updated: \(formatTime(latest))")
                             .font(.caption)
                             .foregroundColor(Color.secondaryText)
@@ -1181,7 +1196,11 @@ struct UsageView: View {
 
                     ForEach(store.accounts, id: \.slot) { account in
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Account \(account.slot)")
+                            // displayName, not "Account \(slot)": once the user names
+                            // an account, the popover section header says "Work" and
+                            // this said "Account 2" — one account labelled two ways
+                            // on one screen. Unnamed it still reads "Account N".
+                            Text(account.displayName)
                                 .font(.caption)
                                 .fontWeight(.semibold)
 
@@ -1218,7 +1237,12 @@ struct UsageView: View {
 
                             HStack(spacing: 8) {
                                 Button("Save & Fetch") {
-                                    let pasted = cookieDrafts[account.slot] ?? ""
+                                    // Trimmed before the guard: a stray space or a
+                                    // trailing newline off the clipboard is not a
+                                    // cookie, and untrimmed it passed !isEmpty and
+                                    // overwrote a working one.
+                                    let pasted = (cookieDrafts[account.slot] ?? "")
+                                        .trimmingCharacters(in: .whitespacesAndNewlines)
                                     guard !pasted.isEmpty else {
                                         account.errorMessage = "Cookie field is empty!"
                                         return
