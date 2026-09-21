@@ -35,7 +35,9 @@ struct UsageBar: View {
 
 // Main entry point
 class AppDelegate: NSObject, NSApplicationDelegate {
-    var statusItem: NSStatusItem!
+    /// Keyed by account slot, so a click can name the account it came from and
+    /// so an account losing its cookie takes its own item away with it.
+    var statusItems: [Int: NSStatusItem] = [:]
     var popover: NSPopover!
     var store: AccountsStore!
     var statusManager: StatusManager!
@@ -48,33 +50,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // NSUserNotification (deprecated but works without permissions for unsigned apps)
         NSLog("✅ App launched, notifications ready")
 
-        // Create status bar item with variable length for compact display
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-
-        if let button = statusItem.button {
-            // Create Claude logo as initial icon
-            updateStatusIcon(percentage: 0)
-            button.action = #selector(handleClick)
-            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
-            button.target = self
-
-            // Force the button to be visible
-            button.appearsDisabled = false
-            button.isEnabled = true
-        }
-
         // Initialize managers
         store = AccountsStore()
         statusManager = StatusManager()
         updateManager = UpdateManager()
 
-        // The managers no longer push the icon through a delegate, so the
-        // status item follows slot 1's reading from here. A menu bar item per
-        // account arrives in a later task.
-        store.accounts[0].$sessionUsage
+        // Two sources move the menu bar: a new reading repaints an icon, and a
+        // cookie saved or cleared adds or removes one. Both land on the same
+        // sync, which is idempotent, so the overlap costs nothing.
+        for account in store.accounts {
+            account.$sessionUsage
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] _ in self?.syncStatusItems() }
+                .store(in: &cancellables)
+        }
+        store.objectWillChange
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] percentage in self?.updateStatusIcon(percentage: percentage) }
+            .sink { [weak self] _ in self?.syncStatusItems() }
             .store(in: &cancellables)
+
+        syncStatusItems()
 
         // Create popover
         popover = NSPopover()
@@ -251,48 +246,67 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         NSApplication.shared.terminate(nil)
     }
 
+    /// The ⌘U hotkey and the right-click menu both reach the popover through
+    /// here, and neither of them knows which icon to anchor to.
     @objc func togglePopover() {
+        togglePopover(anchoredTo: nil)
+    }
+
+    func togglePopover(anchoredTo slot: Int?) {
         if popover.isShown {
             closePopover()
         } else {
-            openPopover()
+            openPopover(anchoredTo: slot)
         }
     }
 
-    @objc func handleClick() {
+    @objc func handleClick(_ sender: NSStatusBarButton) {
         guard let event = NSApp.currentEvent else { return }
+        // Identity, not equality: which of the buttons we own sent this.
+        guard let slot = statusItems.first(where: { $0.value.button === sender })?.key else { return }
 
         if event.type == .rightMouseUp {
             // Right click - show menu
             let menu = NSMenu()
-            let toggleItem = NSMenuItem(title: "Toggle Usage (⌘U)", action: #selector(togglePopover), keyEquivalent: "u")
+            // Spelled out because togglePopover(anchoredTo:) now shares the
+            // name; #selector resolves by name before it filters by @objc.
+            let toggleItem = NSMenuItem(title: "Toggle Usage (⌘U)",
+                                        action: #selector(AppDelegate.togglePopover as (AppDelegate) -> () -> Void),
+                                        keyEquivalent: "u")
             toggleItem.keyEquivalentModifierMask = .command
             menu.addItem(toggleItem)
             menu.addItem(NSMenuItem.separator())
             menu.addItem(NSMenuItem(title: "Quit ClaudeUsageBar", action: #selector(quitApp), keyEquivalent: "q"))
-            statusItem.menu = menu
-            statusItem.button?.performClick(nil)
-            statusItem.menu = nil
+            // Attached and detached on the item that was clicked: left over on
+            // the wrong one, a later left click would drop the menu instead of
+            // opening the popover.
+            statusItems[slot]?.menu = menu
+            statusItems[slot]?.button?.performClick(nil)
+            statusItems[slot]?.menu = nil
         } else {
             // Left click - toggle popover
-            togglePopover()
+            togglePopover(anchoredTo: slot)
         }
     }
 
-    func openPopover() {
-        if let button = statusItem.button {
-            // Force UI refresh by updating percentages
-            DispatchQueue.main.async {
-                self.store.accounts.forEach { $0.updatePercentages() }
-            }
+    func openPopover(anchoredTo slot: Int?) {
+        // ⌘U has no clicked icon to anchor to, so it falls back to the first
+        // one. With no items at all there is nothing to anchor to and nothing
+        // the user could have been looking at, so this is a no-op, not a crash.
+        guard let anchorSlot = slot ?? statusItems.keys.sorted().first,
+              let button = statusItems[anchorSlot]?.button else { return }
 
-            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        // Force UI refresh by updating percentages
+        DispatchQueue.main.async {
+            self.store.accounts.forEach { $0.updatePercentages() }
+        }
 
-            // Add event monitor to detect clicks outside the popover
-            eventMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
-                if self?.popover.isShown == true {
-                    self?.closePopover()
-                }
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+
+        // Add event monitor to detect clicks outside the popover
+        eventMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+            if self?.popover.isShown == true {
+                self?.closePopover()
             }
         }
     }
@@ -307,10 +321,46 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    func updateStatusIcon(percentage: Int) {
-        guard let button = statusItem.button else { return }
-        button.image = menuBarIcon(percentage: percentage)
-        button.title = " \(percentage)%"
+    func updateIcon(for account: UsageManager) {
+        guard let button = statusItems[account.slot]?.button else { return }
+        button.image = menuBarIcon(percentage: account.sessionUsage,
+                                   badge: store.showsBadges ? account.slot : nil)
+        button.title = " \(account.sessionUsage)%"
+    }
+
+    func syncStatusItems() {
+        // With no cookie yet there is nothing configured, but the app must not
+        // vanish from the menu bar — slot 1 stands in until a cookie arrives.
+        // It is the only icon on screen, so it gets no badge: a lone "1" would
+        // number a list of one.
+        let visible = store.configured.isEmpty ? [store.accounts[0]] : store.configured
+        let wanted = Set(visible.map { $0.slot })
+
+        for (slot, item) in statusItems where !wanted.contains(slot) {
+            NSStatusBar.system.removeStatusItem(item)
+            statusItems[slot] = nil
+        }
+
+        for account in visible where statusItems[account.slot] == nil {
+            let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+            // Without an autosaveName macOS forgets where the user dragged each
+            // icon, and two items would shuffle position on every launch.
+            item.autosaveName = "cub-account-\(account.slot)"
+            if let button = item.button {
+                button.action = #selector(handleClick(_:))
+                button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+                button.target = self
+
+                // Force the button to be visible
+                button.appearsDisabled = false
+                button.isEnabled = true
+            }
+            statusItems[account.slot] = item
+        }
+
+        // The badge appears only with two accounts, so adding or removing one
+        // has to restyle the other as well.
+        for account in visible { updateIcon(for: account) }
     }
 }
 
