@@ -1,8 +1,8 @@
 import AppKit
 
-/// Menu bar icon colours. Thresholds match the popover's progress bars
-/// (see `colorForPercentage` in UsageView) so a glance at the menu bar and a
-/// look at the popover never disagree.
+/// Menu bar icon colours. Thresholds match the popover's progress bars (see
+/// `colorForPercentage` in Views/AccountUsageSection.swift) so a glance at the
+/// menu bar and a look at the popover never disagree.
 func usageColor(percentage: Int) -> NSColor {
     if percentage < 70 {
         return NSColor(red: 0.13, green: 0.77, blue: 0.37, alpha: 1.0) // Green
@@ -46,10 +46,10 @@ private func sparkPath(scale: CGFloat = 1, offsetY: CGFloat = 0) -> NSBezierPath
 // after: see the task 6 report.
 //
 // Rows run top-down, which is how they are legible here; the drawing context is
-// y-up, so `badgePath` flips them.
-
-private let badgeGlyphWidth = 5
-private let badgeGlyphHeight = 7
+// y-up, so `badgePath` flips them. The glyph literals below are the only
+// definition of the grid (5 cells wide by 7 tall): badgePath measures each one
+// it is handed, so a new digit added in a different shape draws as written
+// rather than being reflowed to fit a constant declared somewhere above.
 
 /// Bottom-left of the glyph box. x leaves a 1pt margin to the icon's right edge
 /// so the badge never sits flush against the button title beside it, and y

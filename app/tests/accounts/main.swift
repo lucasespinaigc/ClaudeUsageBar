@@ -107,10 +107,34 @@ checkEqual(pair.string(forKey: "account_2_name"), nil, "naming slot 1 does not w
 
 // A whitespace-only name (e.g. a stray leading space) must fall back exactly
 // like an empty one, not surface as a blank prefix in a notification banner.
+// The stored key is asserted alongside it because slot 2's displayName was
+// already "Account 2" before the write: without this, the fallback assertion
+// would pass just as happily if the name never reached UserDefaults at all.
 two.accounts[1].name = "   "
 two.accounts[1].saveSettings()
 checkEqual(two.accounts[1].displayName, "Account 2",
            "a whitespace-only name falls back to the slot name too")
+checkEqual(pair.string(forKey: "account_2_name"), "   ",
+           "the whitespace-only name really was written (the fallback is not vacuous)")
+
+// And the trim has to be in the value displayName RETURNS, not only in the
+// emptiness test it runs: this string is read straight into the notification
+// banner, the popover section header and the Settings label.
+two.accounts[1].name = " Work "
+two.accounts[1].saveSettings()
+checkEqual(two.accounts[1].displayName, "Work", "displayName trims a padded name")
+checkEqual(pair.string(forKey: "account_2_name"), " Work ",
+           "what is stored keeps its spaces, so typing one mid-name is not undone")
+checkEqual(notificationBody(percentage: 90, prefix: two.accounts[1].displayName),
+           "Work — you've reached 90% of your 5-hour session limit",
+           "a padded name reaches the notification banner trimmed")
+
+// A pasted name can carry a newline, which would break the banner, the header
+// and the label across two lines.
+two.accounts[1].name = "\nWork"
+checkEqual(two.accounts[1].displayName, "Work", "displayName strips a pasted newline")
+two.accounts[1].name = ""
+two.accounts[1].saveSettings()
 
 print("app-wide preferences are shared, not copied")
 
@@ -158,7 +182,40 @@ checkEqual(solo.cookieSuffix, "xyz123", "cookieSuffix is the last 6 characters")
 solo.clearSessionCookie()
 checkEqual(solo.cookieSuffix, "", "a cleared account has no suffix to show")
 
-for name in ["cub.test.store.legacy", "cub.test.store.pair", "cub.test.store.virgin"] {
+print("")
+print("clearing an upgraded account")
+
+// Clear is the only revocation gesture the UI offers. migrateAccounts copies
+// `claude_session_cookie` into slot 1 and deliberately never deletes it, and
+// no other code path in the app deletes it either — so unless Clear does,
+// every user upgraded from 1.3.x who pressed it kept a complete, valid session
+// cookie sitting in plaintext in their preferences forever.
+let upgraded = freshDefaults("cub.test.store.upgraded")
+upgraded.set("legacy-cookie-value", forKey: "claude_session_cookie")
+let upgradedStore = AccountsStore(defaults: upgraded)
+checkEqual(upgradedStore.accounts[0].hasCookie, true,
+           "the upgraded account starts out configured from the legacy key")
+
+// Slot 2 has no claim on that key: clearing it must leave slot 1's origin alone.
+upgradedStore.accounts[1].saveSessionCookie("cookie-2")
+upgradedStore.accounts[1].clearSessionCookie()
+checkEqual(upgraded.string(forKey: "claude_session_cookie"), "legacy-cookie-value",
+           "clearing slot 2 leaves the legacy cookie alone")
+
+upgradedStore.accounts[0].clearSessionCookie()
+checkEqual(upgraded.string(forKey: "account_1_cookie"), nil,
+           "clearing slot 1 drops its own cookie")
+checkEqual(upgraded.string(forKey: "claude_session_cookie"), nil,
+           "clearing slot 1 also drops the pre-1.4 cookie it was copied from")
+
+// And the deletion sticks: the version stamp is already in place, so the next
+// launch's migration cannot copy anything back.
+migrateAccounts(upgraded)
+checkEqual(upgraded.string(forKey: "account_1_cookie"), nil,
+           "a cleared upgraded account is not resurrected on the next launch")
+
+for name in ["cub.test.store.legacy", "cub.test.store.pair", "cub.test.store.virgin",
+             "cub.test.store.upgraded"] {
     UserDefaults(suiteName: name)?.removePersistentDomain(forName: name)
 }
 

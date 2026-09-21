@@ -367,7 +367,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-// NSColor extension for hex conversion
 // Main entry point
 @main
 struct Main {
@@ -379,7 +378,6 @@ struct Main {
         app.run()
     }
 }
-
 
 // MARK: - Anthropic Service Status
 
@@ -793,7 +791,6 @@ class UpdateManager: ObservableObject {
     }
 }
 
-// Custom NSTextField that properly handles paste
 // Custom TextView that ensures keyboard commands work
 class PasteableNSTextView: NSTextView {
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
@@ -1507,7 +1504,6 @@ struct UsageView: View {
         }
     }
 
-
     func formatTime(_ date: Date) -> String {
         let formatter = DateFormatter()
         formatter.timeStyle = .short
@@ -1523,7 +1519,6 @@ struct UsageView: View {
         default:         return .gray
         }
     }
-
 
     func relativeTime(_ date: Date) -> String {
         let elapsed = Int(Date().timeIntervalSince(date))

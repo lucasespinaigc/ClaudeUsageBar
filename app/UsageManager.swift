@@ -48,16 +48,23 @@ class UsageManager: ObservableObject {
     /// two of these exist without fighting over one status item.
     var hasCookie: Bool { !sessionCookie.isEmpty }
 
-    /// Falls back to "Account N" for a whitespace-only name too, not just an
-    /// empty one — a stray leading space typed into the field otherwise
-    /// survives all the way into a notification banner as
-    /// "  — you've reached...". The trim happens only here, at the read side,
-    /// not where `name` is written (see the TextField binding in
-    /// ClaudeUsageBar.swift): that binding calls saveSettings() on every
-    /// keystroke, so trimming there would delete a leading space the instant
-    /// the user typed it, before they could type anything after it.
+    /// The name with its surrounding whitespace removed, falling back to
+    /// "Account N" when that leaves nothing — so a whitespace-only name behaves
+    /// exactly like an empty one. The trimmed value is what is returned, not
+    /// just what the emptiness test looks at: this string goes straight into
+    /// the notification banner, the popover section header
+    /// (Views/AccountUsageSection.swift) and the Settings label, so " Work"
+    /// would otherwise ship as " Work — you've reached..." and a pasted
+    /// "\nWork" would break all three across two lines.
+    ///
+    /// The trim happens only here, at the read side, never where `name` is
+    /// written (see the TextField binding in ClaudeUsageBar.swift): that
+    /// binding calls saveSettings() on every keystroke, so trimming there
+    /// would delete a leading space the instant the user typed it, before they
+    /// could type anything after it.
     var displayName: String {
-        name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Account \(slot)" : name
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "Account \(slot)" : trimmed
     }
 
     /// Last characters of the saved cookie, enough to tell two accounts apart
@@ -66,6 +73,16 @@ class UsageManager: ObservableObject {
 
     /// Set by AccountsStore. Empty with a single account, so its notification
     /// text stays exactly what 1.3.x users already know.
+    ///
+    /// ⚠️ Deliberately NOT @Published, and it has to stay that way — including
+    /// the day someone surfaces the prefix in the UI. AccountsStore assigns
+    /// this to every account from inside its own objectWillChange sink
+    /// (refreshNotificationPrefixes), unconditionally and with no equality
+    /// check, and @Published fires on every write whether the value changed or
+    /// not. Publishing it would therefore re-enter that sink: prefix write ->
+    /// objectWillChange -> sink -> main.async -> prefix write, one loop per
+    /// runloop turn, with nothing to stop it. If the UI ever needs to observe
+    /// the prefix, publish a derived value on the store instead of this.
     var notificationPrefix: String = ""
 
     // MARK: - App-wide preferences
@@ -191,6 +208,26 @@ class UsageManager: ObservableObject {
         NSLog("ClaudeUsage: Clearing cookie")
         sessionCookie = ""
         defaults.removeObject(forKey: key("cookie"))
+
+        // Clear is the only revocation gesture the UI offers, so it must leave
+        // no copy of the secret behind. Slot 1's cookie may have been copied
+        // out of the pre-1.4 `claude_session_cookie` key by migrateAccounts,
+        // which by design never deletes it — and no other code path in the app
+        // deletes it either. Without this line, every user upgraded from 1.3.x
+        // who pressed Clear kept a complete, valid session cookie in plaintext
+        // in com.claude.usagebar.plist forever, in the file README.md
+        // advertises as the safe local store.
+        //
+        // This does NOT weaken migrateAccounts' copy-never-delete rule, so
+        // please do not revert it as a violation of that rule: the rule keeps a
+        // rollback to 1.3.x survivable for a user who KEPT their cookie, and a
+        // user who just pressed Clear wants it gone on 1.3.x too. Nothing
+        // re-copies it, either — `accounts_schema_version` was stamped before
+        // any Clear could be pressed, so the migration guard is already false.
+        if slot == 1 {
+            defaults.removeObject(forKey: "claude_session_cookie")
+        }
+
         defaults.synchronize()
 
         // Reset all data
@@ -301,7 +338,9 @@ class UsageManager: ObservableObject {
 
         URLSession.shared.dataTask(with: request) { [weak self] data, response, _ in
             DispatchQueue.main.async {
-                guard let self = self,
+                // hasCookie: a response that lands after the user pressed Clear
+                // must not refill the account (see parseUsageData).
+                guard let self = self, self.hasCookie,
                       let http = response as? HTTPURLResponse, http.statusCode == 200,
                       let data = data,
                       let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
@@ -338,7 +377,9 @@ class UsageManager: ObservableObject {
 
         URLSession.shared.dataTask(with: request) { [weak self] data, response, _ in
             DispatchQueue.main.async {
-                guard let self = self,
+                // hasCookie: a response that lands after the user pressed Clear
+                // must not refill the account (see parseUsageData).
+                guard let self = self, self.hasCookie,
                       let http = response as? HTTPURLResponse, http.statusCode == 200,
                       let data = data,
                       let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
@@ -415,6 +456,14 @@ class UsageManager: ObservableObject {
     }
 
     func parseUsageData(_ data: Data) {
+        // A fetch still in flight when the user presses Clear calls back here
+        // anyway. Writing this account's state now would repopulate one the
+        // user just deleted: hasFetchedData goes back to true and its popover
+        // section reappears, and the updateStatusBar() that follows this call
+        // would fire a threshold banner naming the deleted account and rewrite
+        // the per-slot threshold Clear had just zeroed.
+        guard hasCookie else { return }
+
         guard let snapshot = parseUsagePayload(data) else {
             errorMessage = "Invalid JSON"
             return

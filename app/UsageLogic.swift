@@ -146,7 +146,16 @@ func accountKey(_ slot: Int, _ suffix: String) -> String { "account_\(slot)_\(su
 ///
 /// Copies instead of moving: this runs exactly once on each user's machine and
 /// has no undo, so leaving the legacy keys in place is what makes a rollback to
-/// 1.3.x survivable. The cost is one orphan key.
+/// 1.3.x survivable. The cost is one orphan key. (Clearing account 1 in the UI
+/// does delete that orphan — see UsageManager.clearSessionCookie, where the
+/// reasoning for the exception lives.)
+///
+/// Known dead end, undocumented anywhere else: a user who rolls back to 1.3.x,
+/// changes their cookie there and then returns to 1.4.0 still has
+/// `accounts_schema_version` at 2, so this migration is skipped and their NEW
+/// legacy cookie is silently ignored in favour of the stale `account_1_cookie`.
+/// Nothing is lost — pasting the cookie again in Settings fixes it — but the
+/// app gives no hint that the value it is using is not the one they just set.
 ///
 /// ⚠️ WARNING FOR WHOEVER BUMPS `accountsSchemaVersion` NEXT: the guard below
 /// is a range check (`storedVersion < accountsSchemaVersion`), but the copy in
@@ -161,9 +170,9 @@ func accountKey(_ slot: Int, _ suffix: String) -> String { "account_\(slot)_\(su
 /// `accounts_schema_version` is ever lost — a manual `defaults delete`, or a
 /// pre-1.4 preferences restore — since the guard then reads it back as 0.
 ///
-/// A regression test catches this today by going red the moment the constant
-/// moves to 3 (see "migrateAccounts" in tests/main.swift), but that test is
-/// slated for deletion once this whole branch lands, so THIS COMMENT is what's
+/// A regression test used to catch this, going red the moment the constant
+/// moved to 3 (it lived in tests/main.swift, deleted along with the rest of
+/// that suite once this branch landed), so THIS COMMENT is now the only thing
 /// left to stop it. The structural fix, when a v2 -> v3 step is actually
 /// needed: stop leaning on the outer range guard to scope this copy. Nest it
 /// in its own `if storedVersion < 2 { ... }` step, the same way any v3 logic
@@ -184,9 +193,30 @@ func migrateAccounts(_ defaults: UserDefaults) {
     let slotCookie = defaults.string(forKey: accountKey(1, "cookie")) ?? ""
     if !legacyCookie.isEmpty, slotCookie.isEmpty {
         defaults.set(legacyCookie, forKey: accountKey(1, "cookie"))
+        // The notification threshold rides along with the cookie, inside this
+        // same branch and never on its own: slot 1 has to resume where 1.3.x
+        // left off, or an upgrading user sitting at 80% gets the 25/50/75
+        // banners replayed at them on the first poll after updating. Hoisting
+        // it out of the branch would be the mirror failure — stamping a stale
+        // threshold onto a slot that never received the matching cookie, which
+        // silently mutes that account's first alerts once one is pasted in.
+        // A missing legacy threshold reads back as 0, which is the rearmed
+        // state, so a 1.3.x install that never notified starts fully armed.
         defaults.set(defaults.integer(forKey: "last_notified_threshold"),
                      forKey: accountKey(1, "threshold"))
     }
 
+    // Stamped unconditionally, OUTSIDE the branch above, and that placement is
+    // load-bearing: it is what makes this a one-shot migration on EVERY
+    // install, including one with nothing to copy. Moved inside the `if`, a
+    // fresh install (no legacy cookie) would never be stamped, so this function
+    // would re-arm on every single launch and the copy's own "slot 1 is empty"
+    // test would become the only guard left. The moment a `claude_session_cookie`
+    // value then appeared — a restored pre-1.4 preferences file, a trip back to
+    // 1.3.x and forward again — it would land in slot 1 on the next launch,
+    // configuring or resurrecting an account the user never asked for or had
+    // deliberately cleared. One assertion ("fresh install: schema stamped", in
+    // the now-deleted tests/main.swift) was all that pinned this; the comment
+    // is the guard now.
     defaults.set(accountsSchemaVersion, forKey: "accounts_schema_version")
 }
