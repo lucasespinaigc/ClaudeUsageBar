@@ -43,13 +43,23 @@ func notificationBody(percentage: Int, prefix: String) -> String {
     return "\(prefix) — \(body.prefix(1).lowercased() + body.dropFirst())"
 }
 
-/// Text of the Settings "Test Notification" button. Same prefixing rule as
-/// notificationBody, minus the lead-word lowercasing: "Test notification" is
-/// its own clause here, not the start of the account's sentence.
+/// Text of the Settings "Test Notification" button. No-prefix form is the
+/// exact string ClaudeUsageBar has shipped since 1.3.x, byte for byte.
+///
+/// The prefixed form can't just stitch the account prefix onto that string:
+/// the body's own " - " already reads fine standing alone, but putting the
+/// prefix's em dash in front of it stacks two competing dashes into one line
+/// ("Personal — Test notification - You've reached..."). Instead, "test
+/// notification" becomes a lower-cased clause after a comma — the same
+/// lead-word lowering notificationBody does after its own em dash — so the
+/// whole thing reads as one sentence: "Personal — test notification, you've
+/// reached...".
 func testNotificationBody(prefix: String) -> String {
-    let body = "Test notification - You've reached 75% of your 5-hour session limit"
+    let announcement = "You've reached 75% of your 5-hour session limit"
+    let body = "Test notification - \(announcement)"
     guard !prefix.isEmpty else { return body }
-    return "\(prefix) — \(body)"
+    let loweredAnnouncement = announcement.prefix(1).lowercased() + announcement.dropFirst()
+    return "\(prefix) — test notification, \(loweredAnnouncement)"
 }
 
 struct UsageSnapshot: Equatable {
@@ -137,8 +147,31 @@ func accountKey(_ slot: Int, _ suffix: String) -> String { "account_\(slot)_\(su
 /// Copies instead of moving: this runs exactly once on each user's machine and
 /// has no undo, so leaving the legacy keys in place is what makes a rollback to
 /// 1.3.x survivable. The cost is one orphan key.
+///
+/// ⚠️ WARNING FOR WHOEVER BUMPS `accountsSchemaVersion` NEXT: the guard below
+/// is a range check (`storedVersion < accountsSchemaVersion`), but the copy in
+/// the body is NOT separately versioned — it is the v1 -> v2 step and nothing
+/// marks it as such. The day this constant becomes 3 for an unrelated v2 -> v3
+/// migration, `2 < 3` is true for every user already sitting on schema 2, and
+/// this block runs again for all of them: it reads the legacy
+/// `claude_session_cookie` key (still there, deliberately never deleted above)
+/// and writes it back into slot 1 for anyone who had cleared that account or
+/// moved on to slot 2 alone. That resurrects a cookie the user deliberately
+/// deleted, with no error and no log. The same replay happens if
+/// `accounts_schema_version` is ever lost — a manual `defaults delete`, or a
+/// pre-1.4 preferences restore — since the guard then reads it back as 0.
+///
+/// A regression test catches this today by going red the moment the constant
+/// moves to 3 (see "migrateAccounts" in tests/main.swift), but that test is
+/// slated for deletion once this whole branch lands, so THIS COMMENT is what's
+/// left to stop it. The structural fix, when a v2 -> v3 step is actually
+/// needed: stop leaning on the outer range guard to scope this copy. Nest it
+/// in its own `if storedVersion < 2 { ... }` step, the same way any v3 logic
+/// must nest under `if storedVersion < 3 { ... }`, so each step only ever runs
+/// for someone actually crossing that exact boundary.
 func migrateAccounts(_ defaults: UserDefaults) {
-    guard defaults.integer(forKey: "accounts_schema_version") < accountsSchemaVersion else {
+    let storedVersion = defaults.integer(forKey: "accounts_schema_version")
+    guard storedVersion < accountsSchemaVersion else {
         return
     }
 

@@ -47,7 +47,18 @@ class UsageManager: ObservableObject {
     /// bar observes $sessionUsage instead. Keeping UI out of here is what lets
     /// two of these exist without fighting over one status item.
     var hasCookie: Bool { !sessionCookie.isEmpty }
-    var displayName: String { name.isEmpty ? "Account \(slot)" : name }
+
+    /// Falls back to "Account N" for a whitespace-only name too, not just an
+    /// empty one — a stray leading space typed into the field otherwise
+    /// survives all the way into a notification banner as
+    /// "  — you've reached...". The trim happens only here, at the read side,
+    /// not where `name` is written (see the TextField binding in
+    /// ClaudeUsageBar.swift): that binding calls saveSettings() on every
+    /// keystroke, so trimming there would delete a leading space the instant
+    /// the user typed it, before they could type anything after it.
+    var displayName: String {
+        name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Account \(slot)" : name
+    }
 
     /// Last characters of the saved cookie, enough to tell two accounts apart
     /// without ever putting the secret back into an editable field.

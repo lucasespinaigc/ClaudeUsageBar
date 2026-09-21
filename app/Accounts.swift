@@ -2,6 +2,11 @@ import Combine
 import Foundation
 
 final class AccountsStore: ObservableObject {
+    // Adding a slot here also means adding its digit to `badgeGlyphs` in
+    // MenuBarIcon.swift. `badgeGlyphs` only defines 1 and 2; a slot missing
+    // from it still renders — menuBarIcon(badge:) falls back to the plain,
+    // unbadged spark for an unknown digit — so a third account would degrade
+    // silently instead of failing loudly.
     static let slots = [1, 2]
 
     let accounts: [UsageManager]

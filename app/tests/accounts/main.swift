@@ -105,6 +105,13 @@ checkEqual(two.accounts[0].displayName, "Work", "a named account displays its na
 checkEqual(two.accounts[1].displayName, "Account 2", "an unnamed account displays its slot name")
 checkEqual(pair.string(forKey: "account_2_name"), nil, "naming slot 1 does not write slot 2's name")
 
+// A whitespace-only name (e.g. a stray leading space) must fall back exactly
+// like an empty one, not surface as a blank prefix in a notification banner.
+two.accounts[1].name = "   "
+two.accounts[1].saveSettings()
+checkEqual(two.accounts[1].displayName, "Account 2",
+           "a whitespace-only name falls back to the slot name too")
+
 print("app-wide preferences are shared, not copied")
 
 // Notifications, login item and shortcut are settings of the app, not of an

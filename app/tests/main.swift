@@ -161,8 +161,8 @@ checkEqual(testNotificationBody(prefix: ""),
            "Test notification - You've reached 75% of your 5-hour session limit",
            "the test notification keeps its own wording with no prefix")
 checkEqual(testNotificationBody(prefix: "Personal"),
-           "Personal — Test notification - You've reached 75% of your 5-hour session limit",
-           "the test notification is prefixed the same way as a real one")
+           "Personal — test notification, you've reached 75% of your 5-hour session limit",
+           "the test notification is prefixed without stacking two dashes in one line")
 
 print("migrateAccounts")
 
