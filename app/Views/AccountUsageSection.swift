@@ -10,7 +10,7 @@ struct AccountUsageSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             if let badge = badge {
-                HStack(spacing: 6) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text("\(badge)")
                         .font(.system(size: 9, weight: .bold))
                         .foregroundColor(.white)
@@ -19,6 +19,16 @@ struct AccountUsageSection: View {
                     Text(manager.displayName)
                         .font(.subheadline)
                         .fontWeight(.semibold)
+                    // A typed name says nothing about which claude.ai login it
+                    // is, so the address sits beside it — but not when it IS
+                    // the name, which is the unnamed-account case.
+                    if !manager.email.isEmpty, manager.email != manager.displayName {
+                        Text(manager.email)
+                            .font(.caption2)
+                            .foregroundColor(Color.secondaryText)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
                 }
             }
 
