@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import Foundation
 
@@ -140,6 +141,123 @@ checkEqual(solo.cookieSuffix, "", "a cleared account has no suffix to show")
 for name in ["cub.test.store.legacy", "cub.test.store.pair", "cub.test.store.virgin"] {
     UserDefaults(suiteName: name)?.removePersistentDomain(forName: name)
 }
+
+
+// MARK: - Menu bar icon geometry
+//
+// The badge's clearances are hand-tuned constants — the spark's scale, the
+// glyph grid's origin — and nothing else in the suite would notice them
+// drifting. The icon is a pure function, so rasterising it offscreen and
+// reading pixels back is the whole test.
+
+print("")
+print("menu bar icon")
+
+/// Renders at `scale` device pixels per point. Row 0 is the TOP row.
+func raster(_ image: NSImage, scale: Int) -> NSBitmapImageRep {
+    let rep = NSBitmapImageRep(bitmapDataPlanes: nil,
+                               pixelsWide: Int(image.size.width) * scale,
+                               pixelsHigh: Int(image.size.height) * scale,
+                               bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+                               isPlanar: false, colorSpaceName: .deviceRGB,
+                               bytesPerRow: 0, bitsPerPixel: 0)!
+    rep.size = image.size
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+    image.draw(in: NSRect(origin: .zero, size: image.size))
+    NSGraphicsContext.restoreGraphicsState()
+    return rep
+}
+
+func alpha(_ rep: NSBitmapImageRep, _ x: Int, _ y: Int) -> CGFloat {
+    rep.colorAt(x: x, y: y)?.alphaComponent ?? 0
+}
+
+/// Ink, at the threshold below which a pixel is invisible against the menu bar.
+func inked(_ rep: NSBitmapImageRep, _ x: Int, _ y: Int) -> Bool {
+    alpha(rep, x, y) > 0.15
+}
+
+/// Alpha at a point in icon coordinates (y up from the bottom edge).
+func alphaAtPoint(_ rep: NSBitmapImageRep, x: CGFloat, y: CGFloat) -> CGFloat {
+    let s = CGFloat(rep.pixelsWide) / rep.size.width
+    return alpha(rep, Int(x * s), rep.pixelsHigh - 1 - Int(y * s))
+}
+
+let plain = raster(menuBarIcon(percentage: 50, badge: nil), scale: 2)
+let badged1 = raster(menuBarIcon(percentage: 50, badge: 1), scale: 2)
+let badged2 = raster(menuBarIcon(percentage: 50, badge: 2), scale: 2)
+let badged2At1x = raster(menuBarIcon(percentage: 50, badge: 2), scale: 1)
+
+checkEqual(menuBarIcon(percentage: 50, badge: nil).size, NSSize(width: 16, height: 16),
+           "the icon is 16x16 whatever the badge")
+checkEqual(menuBarIcon(percentage: 50, badge: 2).size, NSSize(width: 16, height: 16),
+           "a badge does not resize the icon")
+
+// (a) Nothing clipped: the badge keeps a point of margin at the bottom and the
+// right, so no cell is lost off the edge and it never sits flush against the
+// percentage the button draws beside it.
+for (name, rep) in [("1", badged1), ("2", badged2)] {
+    var bottomInk = false, rightInk = false
+    for x in 0..<rep.pixelsWide where inked(rep, x, rep.pixelsHigh - 1) { bottomInk = true }
+    for y in 0..<rep.pixelsHigh where inked(rep, rep.pixelsWide - 1, y) { rightInk = true }
+    check(!bottomInk, "badge \(name) leaves the bottom edge clear")
+    check(!rightInk, "badge \(name) leaves the right edge clear")
+}
+
+// (b) Spark and digit never touch. Same colour, so a single shared pixel column
+// fuses them into one blob — the failure the 0.8 scale shipped with.
+/// Narrowest run of clear pixels between the spark's ink and the digit's, over
+/// the rows the glyph box occupies. Only those rows: higher up the spark's
+/// right spike reaches x = 10.2, past the glyph box's left edge, which is
+/// harmless because the digit is nowhere near that height.
+func minimumGap(_ rep: NSBitmapImageRep) -> Int {
+    let s = CGFloat(rep.pixelsWide) / rep.size.width
+    let split = Int(9.5 * s)                       // spark tip 8.84 | glyph box 10
+    let top = rep.pixelsHigh - 1 - Int(9 * s)      // a point above the glyph box
+    var worst = Int.max
+    for y in top..<rep.pixelsHigh {
+        var sparkMax = -1, digitMin = -1
+        for x in 0..<rep.pixelsWide where inked(rep, x, y) {
+            if x < split { sparkMax = x } else if digitMin < 0 { digitMin = x }
+        }
+        guard sparkMax >= 0, digitMin >= 0 else { continue }
+        worst = min(worst, digitMin - sparkMax - 1)
+    }
+    return worst == Int.max ? Int.max : worst
+}
+
+check(minimumGap(badged1) >= 2, "badge 1 keeps a clear column off the spark")
+check(minimumGap(badged2) >= 2, "badge 2 keeps a clear column off the spark")
+check(minimumGap(badged2At1x) >= 1, "badge 2 keeps a clear column off the spark at 1x too")
+
+// (c) No badge means no badge. The full-size spark does reach into the badge's
+// corner, so the test is a cell the glyph fills and the spark cannot: the "2"
+// bottom bar runs the width of the box, where the spark only has its bottom
+// tip, near the centre.
+check(alphaAtPoint(plain, x: 12.5, y: 1.5) < 0.02,
+      "the unbadged icon leaves the badge's corner empty")
+check(alphaAtPoint(badged2, x: 12.5, y: 1.5) > 0.9,
+      "the badged icon fills it")
+
+// And the shrunk spark really is shrunk: the full-size spark's bottom and left
+// tips are ink, the badged one's are not.
+check(alphaAtPoint(plain, x: 8.0, y: 3.5) > 0.9, "the unbadged spark still reaches down the bottom")
+check(alphaAtPoint(badged2, x: 8.0, y: 3.5) < 0.02, "the badged spark has pulled up off it")
+check(alphaAtPoint(plain, x: 12.0, y: 8.0) > 0.9, "the unbadged spark still reaches out to the right")
+check(alphaAtPoint(badged2, x: 12.0, y: 8.0) < 0.02, "the badged spark has pulled in from it")
+
+// (d) The reason the badge is drawn on the grid rather than set in a font: at
+// 16 physical pixels every cell has to be a whole pixel, or the digit greys out
+// into the mush a 9pt glyph produced.
+var partialCells = 0
+for row in 0..<7 {
+    for column in 0..<5 {
+        let a = alphaAtPoint(badged2At1x, x: 10.5 + CGFloat(column), y: 1.5 + CGFloat(row))
+        if a > 0.02 && a < 0.98 { partialCells += 1 }
+    }
+}
+checkEqual(partialCells, 0, "every badge cell is fully on or fully off at 1x")
 
 print("")
 print(failures == 0 ? "PASS" : "\(failures) FAILURE(S)")

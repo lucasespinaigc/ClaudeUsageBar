@@ -55,15 +55,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusManager = StatusManager()
         updateManager = UpdateManager()
 
-        // Two sources move the menu bar: a new reading repaints an icon, and a
-        // cookie saved or cleared adds or removes one. Both land on the same
-        // sync, which is idempotent, so the overlap costs nothing.
-        for account in store.accounts {
-            account.$sessionUsage
-                .receive(on: DispatchQueue.main)
-                .sink { [weak self] _ in self?.syncStatusItems() }
-                .store(in: &cancellables)
-        }
+        // One subscription covers both things that move the menu bar — a new
+        // reading and a cookie saved or cleared — because AccountsStore
+        // forwards every account's objectWillChange, and writing any @Published
+        // on an account (sessionUsage included) is what emits it.
+        //
+        // The hop is not a stylistic main-thread bounce, it is what makes this
+        // correct: objectWillChange fires in willSet, *before* the new value is
+        // stored, and nothing between here and there re-dispatches. Read
+        // synchronously, syncStatusItems would see the state as it was before
+        // the change — a freshly pasted cookie would leave store.configured
+        // still holding one account, so no second icon and no badges until some
+        // later, unrelated emission happened to paper over it.
         store.objectWillChange
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.syncStatusItems() }

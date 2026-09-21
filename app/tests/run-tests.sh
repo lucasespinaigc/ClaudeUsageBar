@@ -16,11 +16,15 @@ swiftc -o "$DIR/cub-tests" UsageLogic.swift tests/support.swift tests/main.swift
 # in. Above all "the migration runs before any manager reads its cookie" —
 # target 1 stays green no matter where that call sits.
 #
+# MenuBarIcon.swift rides along because it already links AppKit here and the
+# icon is a pure function: the badge's clearances are hand-tuned constants that
+# nothing else would catch drifting.
+#
 # -suppress-warnings: this target recompiles UsageManager.swift, whose ~30
 # NSUserNotification deprecations would bury a FAIL line on every run. build.sh
 # is where warnings on app sources get reviewed; this script is for assertions.
 swiftc -o "$DIR/cub-accounts-tests" \
-    UsageLogic.swift UsageManager.swift Accounts.swift \
+    UsageLogic.swift UsageManager.swift Accounts.swift MenuBarIcon.swift \
     tests/support.swift tests/accounts/main.swift \
     -framework SwiftUI -framework AppKit \
     -suppress-warnings
