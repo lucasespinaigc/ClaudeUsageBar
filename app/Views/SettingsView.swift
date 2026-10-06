@@ -247,16 +247,6 @@ struct SettingsView: View {
                     .toggleStyle(.checkbox)
                 }
             }
-
-            // Off the popover, which now only carries usage, but kept: it is
-            // the maintainer's donation link.
-            Button(action: {
-                NSWorkspace.shared.open(URL(string: "https://donate.stripe.com/3cIcN5b5H7Q8ay8bIDfIs02")!)
-            }) {
-                Text("☕ Buy Dev a Coffee")
-                    .foregroundColor(.orange)
-            }
-            .buttonStyle(.borderless)
         }
     }
 
